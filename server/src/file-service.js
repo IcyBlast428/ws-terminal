@@ -20,6 +20,17 @@ function fingerprint(stat) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
+function previewType(buffer) {
+  if (buffer.subarray(0, 5).toString() === '%PDF-') return 'application/pdf';
+  if (buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) return 'image/jpeg';
+  if (/^GIF8[79]a$/.test(buffer.subarray(0, 6).toString())) return 'image/gif';
+  if (buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP') return 'image/webp';
+  if (buffer.subarray(0, 2).toString() === 'BM') return 'image/bmp';
+  if (buffer.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]))) return 'image/x-icon';
+  return null;
+}
+
 class FileService {
   constructor(config) { this.config = config; this.locks = new Map(); this.backupQueue = Promise.resolve(); this.operations = new FileOperations(config); }
 
@@ -220,6 +231,22 @@ class FileService {
       return { path: filePath, size: stat.size, operation: 'download' };
     } finally { await handle.close(); }
   }
+
+  async preview(value, req, res) {
+    const filePath = validPath(value);
+    const handle = await fs.promises.open(await physicalPath(filePath), 'r');
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) throw Object.assign(new Error('Not a regular file'), { code: 'EISDIR' });
+      if (stat.size > Math.min(this.config.maxTransferBytes, this.config.maxPreviewBytes || 20971520)) throw Object.assign(new Error('File exceeds preview limit; download it instead'), { code: 'EFBIG' });
+      const header = Buffer.alloc(16); const { bytesRead } = await handle.read(header, 0, header.length, 0);
+      const type = previewType(header.subarray(0, bytesRead));
+      if (!type) throw Object.assign(new Error('Unsupported preview content; HTML and SVG are not rendered'), { code: 'EISBINARY' });
+      res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.posix.basename(filePath))}` });
+      if (req.method === 'HEAD') res.end();
+      else await pipeline(handle.createReadStream({ start: 0, end: stat.size - 1, autoClose: false }), res);
+    } finally { await handle.close(); }
+  }
 }
 
-module.exports = { FileService, fingerprint, validPath };
+module.exports = { FileService, fingerprint, validPath, previewType };

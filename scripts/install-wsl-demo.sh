@@ -28,6 +28,8 @@ fi
 install -d -o root -g root -m 0755 "$INSTALL_DIR"
 cp -a "$SOURCE_DIR/." "$INSTALL_DIR/"
 chown -R root:root "$INSTALL_DIR"
+chmod -R go-w "$INSTALL_DIR"
+if [[ -f "$INSTALL_DIR/.env" ]]; then chmod 600 "$INSTALL_DIR/.env"; fi
 
 install -d -o root -g root -m 0700 "$CONFIG_DIR"
 if [[ -f "$CONFIG_FILE" ]]; then

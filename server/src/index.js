@@ -159,7 +159,13 @@ function handleFilesystemApi(req, res, url, config, auth, limiter, fileService) 
   }
 
   let operation;
-  if (url.pathname === '/api/filesystem/list' && req.method === 'GET') {
+  if (url.pathname === '/api/filesystem/preview' && ['GET', 'HEAD'].includes(req.method)) {
+    limiter.active++;
+    fileService.preview(url.searchParams.get('path'), req, res).catch(error => {
+      if (!res.headersSent) sendStatus(res, filesystemStatus(error), error.message); else res.destroy();
+    }).finally(() => { limiter.active--; });
+    return true;
+  } else if (url.pathname === '/api/filesystem/list' && req.method === 'GET') {
     operation = Promise.resolve().then(() => listDirectory(url.searchParams.get('path'), config.maxDirectoryEntries, url.searchParams.get('hidden') === '1', {
       offset: url.searchParams.get('offset') || 0, query: url.searchParams.get('query') || '', revision: url.searchParams.get('revision') || ''
     }));

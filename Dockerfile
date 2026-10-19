@@ -12,6 +12,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server
 COPY public ./public
+RUN chmod -R go-w /app
 ENV WS_TERMINAL_CONTAINER=1 WS_TERMINAL_HOST=0.0.0.0 WS_TERMINAL_PORT=8002 WS_TERMINAL_CWD=/root
 EXPOSE 8002
 STOPSIGNAL SIGTERM

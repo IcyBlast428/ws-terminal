@@ -11,6 +11,8 @@ const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.ico': 'image/x-icon',
   '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml; charset=utf-8',
@@ -19,7 +21,7 @@ const MIME_TYPES = {
 };
 
 function applySecurityHeaders(res) {
-  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' blob:; worker-src 'self'; frame-src 'self' about:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Referrer-Policy', 'no-referrer');
@@ -159,7 +161,14 @@ function createStaticHandler(config, terminalManager, auth) {
     }
 
     if (url.pathname === '/' || url.pathname === '/index.html') {
+      if (config.auth.required && !auth.verifyRequest(req)) { send(res, 303, '', { Location: '/login' }); return; }
       streamFile(req, res, path.join(publicDir, 'index.html'));
+      return;
+    }
+
+    if (url.pathname === '/login' || url.pathname === '/login.html') {
+      if (!config.auth.required || auth.verifyRequest(req)) { send(res, 303, '', { Location: '/' }); return; }
+      streamFile(req, res, path.join(publicDir, 'login.html'));
       return;
     }
 

@@ -7,9 +7,9 @@ This deployment runs one root terminal agent per Linux node. It uses host PID/ne
 Build on a connected Linux machine matching the node CPU architecture:
 
 ```bash
-docker build -t ws-terminal:1.2.0 .
-docker tag ws-terminal:1.2.0 registry.internal.example/ws-terminal:1.2.0
-docker push registry.internal.example/ws-terminal:1.2.0
+docker build -t ws-terminal:1.3.0 .
+docker tag ws-terminal:1.3.0 registry.internal.example/ws-terminal:1.3.0
+docker push registry.internal.example/ws-terminal:1.3.0
 ```
 
 The frontend bundle is checked in under `public/assets/editor.bundle.js`. To change editor sources, run `npm ci` and `npm run build` before building the image. Image build downloads the base image, OS packages, and npm dependencies. Application startup does not download anything.
@@ -17,11 +17,11 @@ The frontend bundle is checked in under `public/assets/editor.bundle.js`. To cha
 To transfer an image without a registry:
 
 ```bash
-docker save ws-terminal:1.2.0 -o ws-terminal-1.2.0-linux-amd64-image.tar
-sha256sum ws-terminal-1.2.0-linux-amd64-image.tar > ws-terminal-1.2.0-linux-amd64-image.tar.sha256
+docker save ws-terminal:1.3.0 -o ws-terminal-1.3.0-linux-amd64-image.tar
+sha256sum ws-terminal-1.3.0-linux-amd64-image.tar > ws-terminal-1.3.0-linux-amd64-image.tar.sha256
 ```
 
-Import into the Kubernetes runtime on every target node. For containerd, a typical command is `ctr -n k8s.io images import ws-terminal-1.2.0-linux-amd64-image.tar`; use the actual containerd socket/namespace for your distribution. A Docker import alone does not populate a separate Kubernetes containerd image store. Set the manifest image to the imported exact name and `imagePullPolicy: Never` for a strictly preloaded deployment.
+Import into the Kubernetes runtime on every target node. For containerd, a typical command is `ctr -n k8s.io images import ws-terminal-1.3.0-linux-amd64-image.tar`; use the actual containerd socket/namespace for your distribution. A Docker import alone does not populate a separate Kubernetes containerd image store. Set the manifest image to the imported exact name and `imagePullPolicy: Never` for a strictly preloaded deployment.
 
 ## Deploy
 

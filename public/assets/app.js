@@ -4,8 +4,6 @@
   const statusDot = document.getElementById('statusDot');
   const titleEl = document.getElementById('title');
   const metaEl = document.getElementById('meta');
-  const form = document.getElementById('connectForm');
-  const tokenInput = document.getElementById('tokenInput');
   const connectButton = document.getElementById('connectButton');
   const disconnectButton = document.getElementById('disconnectButton');
   const logoutButton = document.getElementById('logoutButton');
@@ -50,6 +48,8 @@
   const pendingDirectoryRequests = new Map();
   const pendingDirectoryPaths = new Set();
   const pendingFsRequests = new Map();
+  let preferences = window.WorkbenchPreferences.load();
+  let reauthUI = null;
   const selectedEntries = new Set();
   const recentFiles = [];
   let selectionAnchor = null;
@@ -113,7 +113,7 @@
     catch (error) { if (error.name === 'AbortError' || error.name === 'TimeoutError') throw error; throw Object.assign(new Error('网络连接失败'), { kind: 'network' }); }
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401) { authenticated = false; updateControls(); setStatus('pending', '登录已过期'); }
+      if (response.status === 401) { authenticated = false; updateControls(); setStatus('pending', '登录已过期'); showAuthentication(); }
       throw Object.assign(new Error(result.error || `请求失败 (${response.status})`), { status: response.status });
     }
     return result;
@@ -276,11 +276,9 @@
   function updateControls() {
     const terminal = focusedTerminal();
     const needsLogin = config.authRequired && !authenticated;
-    tokenInput.hidden = !needsLogin;
-    tokenInput.disabled = !needsLogin;
     connectButton.hidden = authenticated && (!terminal || terminal.socket);
     connectButton.disabled = false;
-    connectButton.textContent = needsLogin ? '登录' : '重新连接';
+    connectButton.textContent = needsLogin ? '重新登录' : '重新连接';
     disconnectButton.disabled = !terminal || !terminal.socket;
     logoutButton.hidden = !config.authRequired || !authenticated;
     logoutButton.disabled = loggingOut;
@@ -410,7 +408,7 @@
         tab.term.focus();
       });
     } else {
-      requestAnimationFrame(() => tab.editor.focus());
+      if (tab.viewer === 'text') requestAnimationFrame(() => tab.editor.focus());
     }
   }
 
@@ -791,7 +789,7 @@
       }
       tab.term.dispose();
     } else {
-      clearTimeout(tab.draftTimer);
+      clearTimeout(tab.draftTimer); clearTimeout(tab.previewTimer); tab.previewController?.abort(); tab.previewCleanup?.();
       tab.editor.destroy?.();
       for (const [requestId, request] of pendingFsRequests) {
         if (request.tabId === tab.id) {
@@ -816,13 +814,13 @@
   function createTerminalInstance() {
     const fitAddon = new FitAddonCtor();
     const term = new window.Terminal({
-      cursorBlink: true,
+      cursorBlink: preferences.cursorBlink,
       convertEol: false,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
       fontSize: terminalFontSize,
       letterSpacing: 0,
       lineHeight: 1.15,
-      scrollback: 8000,
+      scrollback: preferences.scrollback,
       tabStopWidth: 4,
       theme: {
         background: '#101216', foreground: '#e7edf4', cursor: '#63d7aa', selectionBackground: '#334155',
@@ -833,6 +831,7 @@
       }
     });
     term.loadAddon(fitAddon);
+    term.options.theme = terminalTheme();
     return { term, fitAddon };
   }
 
@@ -873,6 +872,7 @@
 
   function setTerminalFontSize(value) {
     terminalFontSize = Math.max(10, Math.min(24, value));
+    preferences = window.WorkbenchPreferences.save({ ...preferences, terminalFontSize });
     fontSizeValue.textContent = String(terminalFontSize);
     decreaseFontButton.disabled = terminalFontSize <= 10;
     increaseFontButton.disabled = terminalFontSize >= 24;
@@ -888,10 +888,14 @@
   }
 
   function setFileFontSize(value) {
+    const changed = fileFontSize !== Math.max(10, Math.min(28, value));
     fileFontSize = Math.max(10, Math.min(28, value));
+    document.documentElement.style.setProperty('--file-font-size', `${fileFontSize}px`);
+    preferences = window.WorkbenchPreferences.save({ ...preferences, fileFontSize });
     for (const tab of tabs.values()) {
       if (tab.type === 'file') {
         tab.editor.style.fontSize = `${fileFontSize}px`;
+        if (changed && tab.viewer === 'markdown' && !tab.loading) refreshPreview(tab);
       }
     }
     try {
@@ -903,6 +907,7 @@
 
   function setTreeFontSize(value) {
     treeFontSize = Math.max(12, Math.min(22, value));
+    preferences = window.WorkbenchPreferences.save({ ...preferences, treeFontSize });
     directoryTreeEl.style.setProperty('--tree-font-size', `${treeFontSize}px`);
     try {
       localStorage.setItem('ws-terminal-tree-font-size', String(treeFontSize));
@@ -956,7 +961,7 @@
   function createTerminal(group = focusedGroup(), resume = null, startCwd = null) {
     if (!authenticated || terminalTabs().length >= config.maxSessions) {
       if (!authenticated) {
-        tokenInput.focus();
+        showAuthentication();
       }
       return null;
     }
@@ -1449,6 +1454,7 @@
       button.hidden = (action.startsWith('create-') && entry.type !== 'directory') ||
         ((action === 'rename' || action === 'delete') && entry.path === '/') ||
         (action === 'download' && entry.type === 'directory') || ((action === 'bookmark' || action === 'size') && entry.type !== 'directory');
+      if (action === 'open-as') button.hidden = entry.type === 'directory';
       if (['copy', 'cut', 'duplicate'].includes(action) && entry.path === '/') button.hidden = true;
       if (action === 'paste') { button.hidden = entry.type !== 'directory'; button.disabled = !fileClipboard || batchBusy; }
     }
@@ -1877,7 +1883,7 @@
   function layoutSnapshot(element) {
     if (element.classList.contains('split-group')) {
       const group = groups.get(element.dataset.groupId);
-      return { type: 'group', files: groupTabs(group).filter(tab => tab.type === 'file').map(tab => tab.path), active: activeTabInGroup(group)?.path || null };
+      return { type: 'group', files: groupTabs(group).filter(tab => tab.type === 'file').map(tab => tab.path), viewers: Object.fromEntries(groupTabs(group).filter(tab => tab.type === 'file').map(tab => [tab.path, tab.viewer])), active: activeTabInGroup(group)?.path || null };
     }
     if (!element.classList.contains('split-layout')) return null;
     return { type: 'split', horizontal: element.classList.contains('horizontal'), ratio: Number(element.dataset.ratio || 0.5),
@@ -1907,7 +1913,7 @@
         requestAnimationFrame(() => setSplitRatio(split, Math.max(0.1, Math.min(0.9, Number(node.ratio) || 0.5)))); return split;
       }
       const group = createGroup(false); focusGroup(group);
-      for (const value of Array.isArray(node.files) ? node.files : []) { if (restoredFiles++ >= 30) break; if (normalizePath(value)) openFile(value); }
+      for (const value of Array.isArray(node.files) ? node.files : []) { if (restoredFiles++ >= 30) break; if (normalizePath(value)) openFile(value, null, node.viewers?.[value] || 'auto'); }
       const active = groupTabs(group).find(tab => tab.path === node.active); if (active) activateTab(active.id);
       return group.element;
     };
@@ -2009,6 +2015,7 @@
       tab.selectEl.textContent = tab.title;
       tab.selectEl.title = tab.path;
       tab.editor.setPath?.(tab.path);
+      if (tab.viewer !== 'text') refreshPreview(tab);
       const close = tab.tabEl.querySelector('.tab-close'); close.title = `关闭 ${tab.title}`; close.setAttribute('aria-label', close.title);
       if (draftsEnabled) removeDraft(previous).then(() => { if (tab.dirty) scheduleDraft(tab); }).catch(notifyError);
     }
@@ -2097,8 +2104,12 @@
   }
 
   function renderFile(fileTab) {
+    if (fileTab.previewOnly) { fileTab.editor.hidden = true; fileTab.statusEl.hidden = true; fileTab.saveButton.disabled = true; fileTab.metaEl.textContent = formatBytes(fileTab.size); return; }
     fileTab.editor.hidden = fileTab.loading || Boolean(fileTab.error && !fileTab.version);
-    fileTab.statusEl.hidden = !fileTab.editor.hidden;
+    if (fileTab.viewer !== 'text') fileTab.editor.hidden = true;
+    if (fileTab.previewEl) fileTab.previewEl.hidden = fileTab.viewer === 'text';
+    if (fileTab.editorStatus) fileTab.editorStatus.hidden = fileTab.viewer !== 'text';
+    fileTab.statusEl.hidden = fileTab.viewer !== 'text' || !fileTab.editor.hidden;
     fileTab.statusEl.className = `file-status${fileTab.error ? ' error' : ''}`;
     fileTab.statusEl.textContent = fileTab.loading ? '正在读取文件' : fileTab.error;
     fileTab.editor.disabled = fileTab.loading || fileTab.saving;
@@ -2112,6 +2123,8 @@
     fileTab.messageEl.hidden = !fileTab.message;
     fileTab.messageEl.textContent = fileTab.message;
     fileTab.messageEl.classList.toggle('error', Boolean(fileTab.error));
+    if (fileTab.viewer !== 'text' && (fileTab.loading || (fileTab.error && !fileTab.version))) fileTab.previewEl.textContent = fileTab.loading ? '正在读取文件' : fileTab.error;
+    updateEditorStatus(fileTab);
     document.getElementById('saveAllButton').disabled = !authenticated || ![...tabs.values()].some(tab => tab.type === 'file' && tab.dirty && !tab.saving);
     if (focusedTab()?.id === fileTab.id) {
       setStatus(authenticated ? 'ready' : 'pending', authenticated ? `文本文件 · ${fileTab.path}` : '登录已过期，编辑内容已保留');
@@ -2119,6 +2132,7 @@
   }
 
   function requestFile(fileTab, discardDirty = false) {
+    if (fileTab.previewOnly) { refreshPreview(fileTab); return; }
     if (!authenticated) {
       fileTab.loading = false;
       fileTab.error = '需要先登录才能读取文件';
@@ -2227,6 +2241,7 @@
     scheduleWorkspaceSave();
     renderFile(fileTab);
     offerDraft(fileTab);
+    if (fileTab.viewer !== 'text') refreshPreview(fileTab);
   }
 
   function receiveSavedFile(message, terminalId) {
@@ -2254,6 +2269,7 @@
     fileTab.draftNotice?.remove();
     renderFile(fileTab);
     invalidateDirectory(dirname(fileTab.path));
+    if (fileTab.viewer !== 'text') refreshPreview(fileTab);
   }
 
   function receiveFsError(message, terminalId) {
@@ -2280,7 +2296,7 @@
     renderFile(fileTab);
   }
 
-  function openFile(value, terminalId = null) {
+  function openFile(value, terminalId = null, viewer = 'auto') {
     const filePath = normalizePath(value);
     if (!filePath) {
       return;
@@ -2288,6 +2304,7 @@
     const existing = [...tabs.values()].find((tab) => tab.type === 'file' && tab.path === filePath);
     if (existing) {
       activateTab(existing.id);
+      if (viewer !== 'auto') setFileViewer(existing, viewer);
       return existing;
     }
     const group = focusedGroup() || groups.values().next().value;
@@ -2327,7 +2344,7 @@
       id, groupId: group.id, type: 'file', title: basename(filePath), path: filePath, terminalId,
       pane, editor, statusEl: status, messageEl: message, pathEl, metaEl: meta, saveButton: save,
       content: '', finalNewline: '', size: 0, modifiedAt: '', version: '', loading: true, saving: false, dirty: false,
-      error: '', message: '', tabEl: null, selectEl: null
+      error: '', message: '', tabEl: null, selectEl: null, viewer: 'text', languageOverride: 'auto', previewOnly: ['image', 'pdf'].includes(window.WorkbenchPreview.kind(filePath))
     };
     tabs.set(id, fileTab);
     makeTabChrome(fileTab);
@@ -2338,13 +2355,16 @@
       fileTab.message = fileTab.dirty ? '未保存' : '';
       renderFile(fileTab);
       scheduleDraft(fileTab);
+      if (fileTab.viewer !== 'text') { clearTimeout(fileTab.previewTimer); fileTab.previewTimer = setTimeout(() => refreshPreview(fileTab), 250); }
     });
     editor.addEventListener('keydown', (event) => {
-      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
+      if (preferences.keymap !== 'emacs' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
         event.preventDefault();
         saveFile(fileTab);
       }
     });
+    editor.addEventListener('editor-save', async event => { if (fileTab.saving || fileTab.loading || fileTab.previewOnly) return; if ((!fileTab.dirty || await saveFile(fileTab)) && event.detail?.close) closeTab(fileTab.id); });
+    editor.addEventListener('editor-close', () => closeTab(fileTab.id));
     editor.addEventListener('wheel', (event) => {
       if (!event.ctrlKey) {
         return;
@@ -2365,11 +2385,126 @@
     const download = iconButton('download', '下载文件', () => downloadFile(fileTab.path));
     toolbar.insertBefore(iconButton('save-as', '另存为', () => saveFileAs(fileTab)), reload);
     toolbar.insertBefore(compare, reload); toolbar.insertBefore(merge, reload); toolbar.insertBefore(history, reload); toolbar.insertBefore(search, reload); toolbar.insertBefore(jump, reload); toolbar.insertBefore(download, reload);
+    const preview = document.createElement('div'); preview.className = 'file-preview'; preview.hidden = true; fileTab.previewEl = preview; pane.append(preview);
+    preview.addEventListener('wheel', event => { if (!event.ctrlKey || fileTab.previewOnly) return; event.preventDefault(); setFileFontSize(fileFontSize + (event.deltaY < 0 ? 1 : -1)); }, { passive: false });
+    const ways = document.createElement('select'); ways.setAttribute('aria-label', '打开方式'); ways.className = 'viewer-select';
+    const options = fileTab.previewOnly ? { [window.WorkbenchPreview.kind(filePath)]: window.WorkbenchPreview.kind(filePath) === 'pdf' ? 'PDF 预览' : '图片预览' } : { text: '文本编辑器', markdown: 'Markdown 预览', json: 'JSON 树', csv: 'CSV 表格' };
+    for (const [value, name] of Object.entries(options)) { const option = document.createElement('option'); option.value = value; option.textContent = name; ways.append(option); }
+    fileTab.viewerSelect = ways; ways.addEventListener('change', () => setFileViewer(fileTab, ways.value)); toolbar.insertBefore(ways, pathEl);
+    const editorStatus = document.createElement('div'); editorStatus.className = 'editor-statusbar'; fileTab.editorStatus = editorStatus;
+    const cursor = document.createElement('span'); cursor.className = 'cursor-position'; cursor.setAttribute('aria-live', 'off'); fileTab.cursorStatus = cursor;
+    const language = document.createElement('select'); language.setAttribute('aria-label', '文件语言');
+    for (const [value, name] of Object.entries(window.WorkbenchPreferences.languages)) { const option = document.createElement('option'); option.value = value; option.textContent = name; language.append(option); }
+    language.addEventListener('change', () => { fileTab.languageOverride = language.value; editor.setLanguage(language.value); updateEditorStatus(fileTab); }); fileTab.languageSelect = language;
+    editorStatus.append(cursor, language); pane.append(editorStatus); editor.addEventListener('editor-status', () => updateEditorStatus(fileTab));
+    if (fileTab.previewOnly) {
+      for (const button of toolbar.querySelectorAll('button')) if (button !== reload && button !== download) button.hidden = true;
+      editorStatus.hidden = true; fileTab.loading = false; fileTab.viewer = window.WorkbenchPreview.kind(filePath); ways.value = fileTab.viewer;
+    } else { editor.configure(preferences); fileTab.viewer = ['text', 'markdown', 'json', 'csv'].includes(viewer) ? viewer : 'text'; ways.value = fileTab.viewer; }
     fileTab.offerDraft = () => offerDraft(fileTab);
     activateTab(id);
     requestFile(fileTab, true);
+    renderFile(fileTab);
     scheduleWorkspaceSave();
     return fileTab;
+  }
+
+  function updateEditorStatus(tab) {
+    if (!tab.cursorStatus || tab.previewOnly) return;
+    const value = tab.editor.getStatus();
+    tab.cursorStatus.textContent = `Ln ${value.line}, Col ${value.column}${value.selected ? ` · 已选择 ${value.selected}` : ''} · ${value.lines} 行 · ${preferences.useTabs ? 'Tab' : '空格'} ${preferences.indentSize} · ${window.WorkbenchPreferences.languages[value.language] || value.language}`;
+  }
+
+  async function previewBytes(path, signal) {
+    const response = await fetch(`/api/filesystem/preview?path=${encodeURIComponent(path)}`, { cache: 'no-store', signal });
+    if (!response.ok) {
+      if (response.status === 401) { authenticated = false; updateControls(); showAuthentication(); }
+      const body = await response.json().catch(() => ({})); throw Object.assign(new Error(body.error || '预览读取失败'), { status: response.status });
+    }
+    return { data: new Uint8Array(await response.arrayBuffer()), mime: response.headers.get('Content-Type') || '' };
+  }
+
+  async function refreshPreview(tab) {
+    if (!tabs.has(tab.id) || tab.viewer === 'text') return;
+    tab.previewController?.abort(); tab.previewCleanup?.();
+    const controller = new AbortController(); tab.previewController = controller;
+    const cleanups = [];
+    tab.previewCleanup = () => { for (const cleanup of cleanups.splice(0)) { try { cleanup(); } catch {} } };
+    const host = document.createElement('div'); host.className = 'preview-content'; tab.previewEl.replaceChildren(host); tab.previewEl.hidden = false;
+    host.textContent = '正在载入预览';
+    try {
+      const binary = tab.previewOnly ? await previewBytes(tab.path, controller.signal) : {};
+      controller.signal.throwIfAborted();
+      if (tab.previewOnly) { tab.size = binary.data.byteLength; tab.metaEl.textContent = formatBytes(tab.size); }
+      host.replaceChildren();
+      await window.WorkbenchPreview.render(host, { kind: tab.viewer, text: tab.previewOnly ? '' : tab.dirty ? serializedContent(tab) : tab.diskContent, ...binary, path: tab.path, theme: effectiveTheme(), signal: controller.signal,
+        fontSize: fileFontSize, cleanup: callback => { if (controller.signal.aborted) callback(); else cleanups.push(callback); }, loadAsset: path => previewBytes(path, controller.signal) });
+      if (tab.previewOnly) { tab.error = ''; focusGroup(focusedGroup()); }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      host.replaceChildren(); const message = document.createElement('p'); message.className = 'preview-status error'; message.textContent = window.WorkbenchModel.errorText(error); host.append(message);
+    }
+  }
+
+  function setFileViewer(tab, value) {
+    const allowed = [...tab.viewerSelect.options].map(option => option.value);
+    if (!allowed.includes(value)) return;
+    tab.viewer = value; tab.viewerSelect.value = value; tab.previewEl.hidden = value === 'text';
+    if (value === 'text') { tab.previewController?.abort(); tab.previewCleanup?.(); tab.editor.hidden = tab.loading; tab.editor.remeasure(); requestAnimationFrame(() => tab.editor.focus()); }
+    else if (!tab.loading && (tab.version || tab.previewOnly)) refreshPreview(tab);
+    renderFile(tab); scheduleWorkspaceSave();
+  }
+
+  function showOpenAs(entry) {
+    const kind = window.WorkbenchPreview.kind(entry.path);
+    const kinds = kind === 'text' ? { text: '文本编辑器', markdown: 'Markdown 预览', json: 'JSON 树', csv: 'CSV 表格' } : { [kind]: kind === 'pdf' ? 'PDF 预览' : '图片预览' };
+    showPicker('打开方式', Object.entries(kinds).map(([viewer, label]) => ({ label, detail: entry.path, action: () => openFile(entry.path, null, viewer) })));
+  }
+
+  function effectiveTheme() { return preferences.theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : preferences.theme; }
+
+  function terminalTheme() {
+    const light = effectiveTheme() === 'light';
+    return { background: light ? '#ffffff' : '#101216', foreground: light ? '#252b2f' : '#e7edf4', cursor: light ? '#21684f' : '#63d7aa', selectionBackground: light ? '#c8e5d9' : '#364c44',
+      black: light ? '#24282b' : '#191d22', red: light ? '#b82844' : '#fb7185', green: light ? '#236b45' : '#6ee7b7', yellow: light ? '#87620c' : '#facc15', blue: light ? '#245b9b' : '#93c5fd', magenta: light ? '#874780' : '#c4b5fd', cyan: light ? '#126d73' : '#67e8f9', white: light ? '#707a80' : '#e5e7eb', brightBlack: '#6b757d', brightRed: light ? '#ca3650' : '#fda4af', brightGreen: light ? '#1a7a48' : '#86efac', brightYellow: light ? '#896b0a' : '#fde68a', brightBlue: light ? '#246aa7' : '#bfdbfe', brightMagenta: light ? '#865192' : '#ddd6fe', brightCyan: light ? '#08797d' : '#a5f3fc', brightWhite: light ? '#252b2f' : '#f8fafc' };
+  }
+
+  function applyPreferences(value) {
+    const oldTheme = document.documentElement.dataset.theme || effectiveTheme();
+    preferences = window.WorkbenchPreferences.save(value); document.documentElement.dataset.theme = effectiveTheme();
+    setTerminalFontSize(preferences.terminalFontSize); setFileFontSize(preferences.fileFontSize); setTreeFontSize(preferences.treeFontSize);
+    for (const tab of tabs.values()) {
+      if (tab.type === 'terminal') { tab.term.options.theme = terminalTheme(); tab.term.options.cursorBlink = preferences.cursorBlink; tab.term.options.scrollback = preferences.scrollback; }
+      else { tab.editor.configure(preferences); updateEditorStatus(tab); if (oldTheme !== effectiveTheme() && tab.viewer === 'markdown' && !tab.loading) refreshPreview(tab); }
+    }
+    scheduleFitAllVisibleTerminals();
+  }
+
+  function showSettings(active = 'appearance') {
+    openUtility('设置');
+    const layout = document.createElement('div'); layout.className = 'settings-layout'; const navigation = document.createElement('div'); navigation.className = 'settings-tabs'; navigation.setAttribute('role', 'tablist'); navigation.setAttribute('aria-label', '设置分类');
+    const sections = document.createElement('div'); sections.className = 'settings-sections'; layout.append(navigation, sections); utilityBody.append(layout);
+    const panels = new Map(); const selectors = new Map();
+    const choosePanel = id => { active = id; for (const [key, panel] of panels) { panel.hidden = key !== id; selectors.get(key).setAttribute('aria-selected', String(key === id)); selectors.get(key).tabIndex = key === id ? 0 : -1; } };
+    for (const [id, title] of Object.entries({ appearance: '外观', editor: '编辑器', terminal: '终端', shortcuts: '快捷键' })) {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = title; button.setAttribute('role', 'tab'); button.id = `settings-tab-${id}`; button.setAttribute('aria-controls', `settings-panel-${id}`); button.addEventListener('click', () => choosePanel(id)); selectors.set(id, button); navigation.append(button);
+      const panel = document.createElement('section'); panel.id = `settings-panel-${id}`; panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', button.id); panels.set(id, panel); sections.append(panel);
+    }
+    navigation.addEventListener('keydown', event => { if (!['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft'].includes(event.key)) return; event.preventDefault(); const keys = [...panels.keys()]; const index = keys.indexOf(active); choosePanel(keys[(index + (['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : -1) + keys.length) % keys.length]); selectors.get(active).focus(); });
+    const field = (section, key, label, type, options) => {
+      const row = document.createElement('label'); row.className = 'settings-field'; const caption = document.createElement('span'); caption.textContent = label;
+      const input = document.createElement(type === 'select' ? 'select' : 'input'); input.setAttribute('aria-label', label);
+      if (type === 'select') { for (const [value, text] of Object.entries(options)) { const option = document.createElement('option'); option.value = value; option.textContent = text; input.append(option); } input.value = preferences[key]; }
+      else { input.type = type; if (type === 'checkbox') input.checked = preferences[key]; else { input.value = preferences[key]; input.min = options[0]; input.max = options[1]; input.step = options[2] || 1; } }
+      input.addEventListener('change', () => { applyPreferences({ ...preferences, [key]: type === 'checkbox' ? input.checked : type === 'number' ? Number(input.value) : input.value }); if (type === 'number') input.value = preferences[key]; });
+      row.append(caption, input); panels.get(section).append(row);
+    };
+    field('appearance', 'theme', '主题', 'select', { dark: '深色', light: '浅色', system: '跟随系统' }); field('appearance', 'treeFontSize', '目录字号', 'number', [12, 22]);
+    field('editor', 'fileFontSize', '编辑器字号', 'number', [10, 28]); field('editor', 'wordWrap', '自动换行', 'checkbox'); field('editor', 'indentSize', '缩进宽度', 'number', [1, 8]); field('editor', 'useTabs', '使用 Tab 缩进', 'checkbox');
+    field('editor', 'keymap', '编辑器键位', 'select', { default: '标准', vim: 'Vim', emacs: 'Emacs 风格' }); field('editor', 'language', '默认语言', 'select', window.WorkbenchPreferences.languages);
+    field('terminal', 'terminalFontSize', '终端字号', 'number', [10, 24]); field('terminal', 'cursorBlink', '光标闪烁', 'checkbox'); field('terminal', 'scrollback', '回滚行数', 'number', [1000, 50000, 1000]);
+    for (const command of [{ label: '命令面板', shortcut: 'Ctrl+Shift+P' }, ...commands().filter(command => command.shortcut)]) { const row = document.createElement('div'); row.className = 'shortcut-row'; const label = document.createElement('span'); label.textContent = command.label; const shortcut = document.createElement('kbd'); shortcut.textContent = command.shortcut; row.append(label, shortcut); panels.get('shortcuts').append(row); }
+    utilityActions.append(actionButton('恢复默认', async () => { if (await choose('恢复默认设置', '恢复本浏览器的外观、编辑器和终端设置？', [{ label: '取消', value: false }, { label: '恢复默认', value: true }])) applyPreferences(window.WorkbenchPreferences.defaults); showSettings(active); })); choosePanel(active);
   }
 
   function visibleEntryPaths() {
@@ -2598,7 +2733,7 @@
       { id: 'terminal.new', label: '新建终端', shortcut: 'Ctrl+Alt+T', enabled: () => authenticated && terminalTabs().length < config.maxSessions, action: () => createTerminal() },
       { id: 'terminal.here', label: '在当前目录新建终端', enabled: () => authenticated, action: () => createTerminal(focusedGroup(), null, currentCwd) },
       { id: 'terminal.rename', label: '重命名终端', enabled: () => Boolean(focusedTerminal()), action: () => renameTerminal() },
-      { id: 'file.save', label: '保存当前文件', shortcut: 'Ctrl+S', enabled: () => authenticated && file?.dirty && !file.saving, action: () => saveFile(file) },
+      { id: 'file.save', label: '保存当前文件', shortcut: preferences.keymap === 'emacs' ? 'Ctrl+X Ctrl+S' : 'Ctrl+S', enabled: () => authenticated && file?.dirty && !file.saving, action: () => saveFile(file) },
       { id: 'file.save-as', label: '另存为', shortcut: 'Ctrl+Shift+S', enabled: () => authenticated && file?.version && !file.saving, action: () => saveFileAs(file) },
       { id: 'file.save-all', label: '保存全部', shortcut: 'Ctrl+Alt+S', enabled: () => authenticated && [...tabs.values()].some(tab => tab.type === 'file' && tab.dirty), action: saveAllFiles },
       { id: 'file.new', label: '新建文件', enabled: () => authenticated, action: () => openEntryDialog('create-file', currentCwd) },
@@ -2607,6 +2742,7 @@
       { id: 'folder.copy-path', label: '复制当前目录路径', enabled: () => authenticated, action: () => copyText(currentCwd) },
       { id: 'folder.refresh', label: '刷新当前目录', enabled: () => authenticated, action: () => loadDirectory(currentCwd, true) },
       { id: 'view.tabs', label: '标签总览', shortcut: 'Ctrl+Alt+P', action: showTabOverview },
+      { id: 'view.settings', label: '设置', shortcut: 'Ctrl+,', action: showSettings },
       { id: 'view.focus', label: focusMode ? '恢复分屏布局' : '专注当前分屏', shortcut: 'Ctrl+Alt+M', action: () => toggleFocus() },
       { id: 'view.sidebar', label: '显示或隐藏目录树', shortcut: 'Ctrl+Alt+B', action: () => setExplorerHidden(!workspaceEl.classList.contains('explorer-hidden')) },
       { id: 'view.sessions', label: '终端会话', enabled: () => authenticated, action: showSessions },
@@ -2623,35 +2759,20 @@
 
   function showCommands() { showPicker('命令面板', commands().map(command => ({ ...command, disabled: Boolean(command.enabled && !command.enabled()) }))); }
 
-  async function login() {
-    const token = tokenInput.value.trim();
-    if (!token) {
-      tokenInput.focus();
-      setStatus('pending', '需要访问令牌');
-      return false;
-    }
-    const response = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token })
+  function showAuthentication() {
+    if (loggingOut) return;
+    const dialog = document.getElementById('authDialog');
+    if (!reauthUI) reauthUI = window.WorkbenchAuth.mount(document.getElementById('reauthMount'), async () => {
+      authenticated = true; dialog.close(); initializeFilesystemTree(); updateControls(); focusGroup(focusedGroup());
     });
-    tokenInput.value = '';
-    if (!response.ok) {
-      setStatus('pending', response.status === 401 ? '访问令牌不正确' : '尚未登录');
-      notifyError(Object.assign(new Error(response.status === 401 ? '访问令牌不正确' : response.status === 429 ? '登录尝试过多，请稍后重试' : '登录请求失败'), { status: response.status }));
-      return false;
-    }
-    authenticated = true;
-    setStatus('pending', '已登录，未启动 Terminal');
-    initializeFilesystemTree();
-    updateControls();
-    return true;
+    if (!dialog.open) dialog.showModal();
+    reauthUI.focus();
   }
 
   async function connect() {
     try {
       if (config.authRequired && !authenticated) {
-        await login();
+        showAuthentication();
         return;
       }
       const terminal = focusedTerminal();
@@ -2671,33 +2792,27 @@
       return;
     }
     loggingOut = true;
+    updateControls();
+    try {
+      const response = await fetch('/api/logout', { method: 'POST' });
+      if (!response.ok) throw new Error('退出请求未成功，请重试');
+    } catch (error) {
+      loggingOut = false; updateControls(); notifyError(new Error('未能确认退出，当前内容已保留，请检查网络后重试')); return;
+    }
     fileClipboard = null; selectedEntries.clear(); recentFiles.splice(0);
     authenticated = false;
     for (const tabId of [...tabs.keys()]) {
       closeTab(tabId, true);
     }
-    try {
-      await fetch('/api/logout', { method: 'POST' });
-    } finally {
-      loggingOut = false;
-      clearPendingDirectoryRequests();
-      clearPendingFsRequests();
-      directoryCache.clear();
-      expandedDirectories.clear();
-      currentCwd = '/';
-      cwdPathEl.textContent = '/';
-      cwdPathEl.title = '/';
-      renderDirectoryTree();
-      setStatus('pending', '需要访问令牌');
-      updateControls();
-      tokenInput.focus();
-    }
+    loggingOut = false;
+    clearPendingDirectoryRequests(); clearPendingFsRequests(); directoryCache.clear(); expandedDirectories.clear();
+    currentCwd = '/'; cwdPathEl.textContent = '/'; cwdPathEl.title = '/';
+    renderDirectoryTree(); setStatus('pending', '需要访问令牌'); updateControls(); location.replace('/login');
   }
 
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    connect();
-  });
+  connectButton.addEventListener('click', connect);
+  document.getElementById('authCloseButton').addEventListener('click', () => document.getElementById('authDialog').close());
+  document.getElementById('authDialog').addEventListener('close', () => { if (document.getElementById('authDialog').open) return; reauthUI?.clear(); reauthUI = null; document.getElementById('reauthMount').replaceChildren(); });
   disconnectButton.addEventListener('click', () => {
     const terminal = focusedTerminal();
     if (terminal) {
@@ -2722,6 +2837,8 @@
       openEntryDialog(action, entry.path);
     } else if (action === 'rename') {
       openEntryDialog('rename', entry.path);
+    } else if (action === 'open-as') {
+      hideTreeContextMenu(); showOpenAs(entry);
     } else if (action === 'delete') {
       if (paths.length > 1 || [...tabs.values()].some(tab => tab.type === 'file' && tab.dirty && (tab.path === entry.path || tab.path.startsWith(`${entry.path}/`)))) { hideTreeContextMenu(); batchFiles('delete', paths).catch(notifyError); }
       else openDeleteDialog(entry);
@@ -2764,7 +2881,8 @@
     if (!dialogOpen && modifier && event.shiftKey && !event.altKey && key === 'p') { event.preventDefault(); event.stopImmediatePropagation(); showCommands(); return; }
     if (!dialogOpen && modifier && event.altKey && !event.shiftKey) command = { t: 'terminal.new', s: 'file.save-all', l: 'folder.path', p: 'view.tabs', m: 'view.focus', b: 'view.sidebar', w: 'tab.close' }[key];
     if (!dialogOpen && modifier && event.shiftKey && !event.altKey && key === 's' && focusedTab()?.type === 'file') command = 'file.save-as';
-    if (!dialogOpen && modifier && !event.shiftKey && !event.altKey && key === 's' && focusedTab()?.type === 'file') command = 'file.save';
+    if (!dialogOpen && modifier && !event.shiftKey && !event.altKey && key === ',') command = 'view.settings';
+    if (!dialogOpen && modifier && !event.shiftKey && !event.altKey && key === 's' && focusedTab()?.type === 'file' && !(preferences.keymap === 'emacs' && event.target.closest('.file-editor'))) command = 'file.save';
     if (command) { event.preventDefault(); event.stopImmediatePropagation(); runCommand(command); return; }
     if (!dialogOpen && event.key === 'Escape' && focusMode) { event.preventDefault(); restoreFocus(); }
   }, { capture: true });
@@ -2856,9 +2974,7 @@
   });
   window.addEventListener('resize', () => setExplorerWidth(explorerWidth, false));
   async function init() {
-    setTerminalFontSize(terminalFontSize);
-    setFileFontSize(fileFontSize);
-    setTreeFontSize(treeFontSize);
+    applyPreferences(preferences);
     setExplorerWidth(explorerWidth, false);
     setExplorerHidden(false);
     const rootGroup = createGroup();
@@ -2882,7 +2998,7 @@
         setStatus('pending', '已登录，未启动 Terminal');
       } else {
         setStatus('pending', '需要访问令牌');
-        tokenInput.focus();
+        showAuthentication();
       }
     } catch {
       setStatus('offline', '服务不可用');
@@ -2925,6 +3041,8 @@
   document.getElementById('auditButton').addEventListener('click', () => showAudit().catch(notifyError));
   document.getElementById('draftsButton').addEventListener('click', () => showDrafts().catch(notifyError));
   document.getElementById('commandButton').addEventListener('click', showCommands);
+  document.getElementById('settingsButton').addEventListener('click', () => showSettings());
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (preferences.theme === 'system') applyPreferences(preferences); });
   document.getElementById('tabOverviewButton').addEventListener('click', showTabOverview);
   document.getElementById('saveAllButton').addEventListener('click', () => saveAllFiles().catch(notifyError));
   document.getElementById('copyEntriesButton').addEventListener('click', () => setFileClipboard('copy'));
@@ -2947,7 +3065,7 @@
   document.querySelectorAll('[data-icon]').forEach(button => button.append(window.WorkbenchIcons(button.dataset.icon)));
   for (const button of treeContextMenu.querySelectorAll('button')) {
     const action = button.dataset.action;
-    const name = { 'create-file': 'file-add', 'create-directory': 'folder-add', 'copy-path': 'copy', bookmark: 'star', properties: 'info', size: 'info' }[action] || action;
+    const name = { 'create-file': 'file-add', 'create-directory': 'folder-add', 'copy-path': 'copy', bookmark: 'star', properties: 'info', size: 'info', 'open-as': 'preview' }[action] || action;
     button.prepend(window.WorkbenchIcons(name));
   }
   sidebarToggleButton.replaceChildren(window.WorkbenchIcons('panel'));

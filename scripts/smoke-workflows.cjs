@@ -39,7 +39,8 @@ async function main() {
     await page.goto(baseURL);
     await page.getByRole('textbox', { name: '访问令牌', exact: true }).fill(token);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('#nodeIdentity').textContent.includes('root'));
+    await page.waitForURL(url => url.pathname === '/');
+    await page.waitForFunction(() => document.querySelector('#nodeIdentity')?.textContent.includes('root'));
     await mutate('create-directory', '/tmp', path.posix.basename(fixture));
     await mutate('create-file', fixture, 'note.conf'); created.add(file); await write('note=original\n');
 
@@ -124,7 +125,7 @@ async function main() {
     await page.unroute('**/api/filesystem/write');
     await page.getByRole('textbox', { name: '访问令牌', exact: true }).fill(token);
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('#tokenInput').hidden);
+    await page.waitForFunction(() => !document.querySelector('#authDialog')?.open && !document.querySelector('#tokenInput'));
     assert.ok((await editor().textContent()).includes('keep-through-login'));
     await editor().press('Control+s'); await page.waitForFunction(() => document.querySelector('.file-message').textContent === '已保存');
 

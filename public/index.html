@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WS Terminal</title>
     <link rel="stylesheet" href="/vendor/xterm.css" />
-    <link rel="stylesheet" href="/assets/app.css?v=1.2.0" />
+    <link rel="stylesheet" href="/assets/app.css?v=1.3.0" />
+    <link rel="stylesheet" href="/assets/workbench-extra.css?v=1.3.0" />
   </head>
   <body>
     <main class="shell-page">
@@ -21,9 +22,8 @@
             <span class="meta" id="meta"></span>
           </div>
         </div>
-        <form class="controls" id="connectForm" autocomplete="off">
-          <input id="tokenInput" name="token" type="password" placeholder="访问令牌" aria-label="访问令牌" />
-          <button id="connectButton" type="submit">登录</button>
+        <div class="controls" id="connectForm">
+          <button id="connectButton" type="button">重新连接</button>
           <button id="disconnectButton" type="button" title="结束当前终端进程">结束终端</button>
           <button id="logoutButton" type="button">退出</button>
           <button class="icon-button" id="sessionsButton" type="button" title="终端会话" aria-label="终端会话" data-icon="sessions"></button>
@@ -32,12 +32,13 @@
           <button class="icon-button" id="saveAllButton" type="button" title="保存全部" aria-label="保存全部" data-icon="save-all"></button>
           <button class="icon-button" id="tabOverviewButton" type="button" title="标签总览" aria-label="标签总览" data-icon="tabs"></button>
           <button class="icon-button" id="commandButton" type="button" title="命令面板" aria-label="命令面板" data-icon="command"></button>
+          <button class="icon-button" id="settingsButton" type="button" title="设置" aria-label="设置" data-icon="settings"></button>
           <div class="font-size-control" aria-label="终端字号">
             <button id="decreaseFontButton" type="button" title="减小终端字号" aria-label="减小终端字号">−</button>
             <output id="fontSizeValue" aria-live="polite">14</output>
             <button id="increaseFontButton" type="button" title="增大终端字号" aria-label="增大终端字号">+</button>
           </div>
-        </form>
+        </div>
       </header>
       <div class="workspace" id="workspace">
         <aside class="file-explorer" id="fileExplorer" aria-label="目录结构">
@@ -91,6 +92,7 @@
       <button type="button" data-action="create-file" role="menuitem">新建文件</button>
       <button type="button" data-action="create-directory" role="menuitem">新建目录</button>
       <button type="button" data-action="rename" role="menuitem">重命名</button>
+      <button type="button" data-action="open-as" role="menuitem">打开方式</button>
       <button type="button" data-action="copy" role="menuitem">复制</button>
       <button type="button" data-action="cut" role="menuitem">剪切</button>
       <button type="button" data-action="paste" role="menuitem">粘贴到此目录</button>
@@ -121,6 +123,10 @@
       <footer id="utilityActions"></footer>
     </dialog>
     <div class="notifications" id="notifications" role="status" aria-live="polite"></div>
+    <dialog class="auth-dialog" id="authDialog" aria-label="重新登录" aria-modal="true">
+      <button class="icon-button auth-close" id="authCloseButton" type="button" title="稍后登录" aria-label="稍后登录" data-icon="close"></button>
+      <div id="reauthMount"></div>
+    </dialog>
     <input id="uploadInput" type="file" multiple hidden />
     <dialog class="entry-dialog" id="deleteDialog">
       <form id="deleteForm">
@@ -136,8 +142,11 @@
     </dialog>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>
-    <script src="/assets/editor.bundle.js?v=1.2.0"></script>
-    <script src="/assets/workbench-model.js?v=1.2.0"></script>
-    <script src="/assets/app.js?v=1.2.0"></script>
+    <script src="/assets/preferences.js?v=1.3.0"></script>
+    <script src="/assets/auth.bundle.js?v=1.3.0"></script>
+    <script src="/assets/editor.bundle.js?v=1.3.0"></script>
+    <script src="/assets/previews.bundle.js?v=1.3.0"></script>
+    <script src="/assets/workbench-model.js?v=1.3.0"></script>
+    <script src="/assets/app.js?v=1.3.0"></script>
   </body>
 </html>

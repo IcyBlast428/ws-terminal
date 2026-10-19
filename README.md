@@ -4,6 +4,21 @@
 
 运行时不访问 CDN 或互联网。前端使用项目内的 `xterm.js`、CodeMirror 和 Lucide 图标，后端使用 Node.js、`ws` 和 `node-pty`。
 
+## 1.3 登录、设置与文件预览
+
+- 未登录访问 `/` 会跳转到独立的 `/login` 页面，访问令牌不再出现在工作区工具栏。令牌不放入 URL、不写入浏览器存储，登录后清空输入。退出登录返回登录页；退出请求失败时保留当前内容并允许重试。
+- 登录过期时在当前工作区打开同样的登录表单，重新登录后保留未保存的编辑，不通过整页跳转丢弃内容。登录、刷新和重新登录都不自动创建终端。
+- 顶部设置图标或 `Ctrl+,` 打开设置中心，包含深色、浅色和跟随系统主题，编辑器/终端/目录字号、自动换行、1–8 宽度的缩进、Tab/空格、默认语言、光标闪烁和终端回滚行数。设置仅存于当前浏览器，不保存文件正文或令牌。
+- 编辑器可选择标准、Vim 或 Emacs 风格键位。Vim 的 `:w`、`:wq`、`:q` 连接现有保存及关闭流程，仍校验版本和确认未保存内容，不绕过冲突；Emacs 风格提供常用移动键，`Ctrl+S` 为查找，`Ctrl+X Ctrl+S` 保存，不宣称完整 Emacs 环境。终端原有键位不受影响。
+- 编辑器底部显示光标行列、选中长度、行数、缩进与语言；右侧可单独切换当前文件语言。语言模式改变不会更改文件内容或重建终端。
+- 文件工具栏与目录右键菜单提供“打开方式”：文本编辑器、Markdown 预览、JSON 树、CSV 表格。切换使用当前编辑内容，不自动写回；未修改文件直接使用原始内容，保留 CSV 引号内的混合换行。
+- JSON 按需展开，最多显示 10000 个节点、40 层；CSV/TSV 使用 Papa Parse 处理引号和多行字段，每页 100 行，最多约 2 万条记录、200 列。两种视图只展示数据，不执行 HTML 或表格公式。
+- Markdown 使用 Marked + DOMPurify 净化，并在没有脚本权限的独立沙箱中展示；不加载外部图片或链接资源。本地图片通过已认证的文件接口读取，最多 8 张、合计 20 MiB。HTML、SVG 不作为可执行页面直接预览。
+- PNG/JPEG/GIF/WebP/BMP/ICO 和 PDF 默认只读预览，支持缩放；图片可旋转、适应窗口，PDF 使用本地 PDF.js 按页渲染，不启用脚本、XFA 或交互动作。二进制预览默认限制 20 MiB，图片限制 5000 万像素，PDF 画布限制约 1600 万像素。可用 `Ctrl+鼠标滚轮` 调整预览字号或图片/PDF 缩放。
+- PDF 引擎、worker、字体、CMap、WASM 解码器及许可证均打包在 `public/assets/pdf/`，不使用 CDN。新增解析器仅作为构建依赖，镜像运行时不需要安装 PDF 的 Node 原生组件。加密或损坏的 PDF 等不支持的内容会显示错误，可下载后使用专门工具查看。
+
+实现参考：[Marked 安全建议](https://marked.js.org/using_advanced)、[PDF.js 示例](https://mozilla.github.io/pdf.js/examples/index.html)、[Papa Parse 文档](https://www.papaparse.com/docs)、[CodeMirror Vim](https://github.com/replit/codemirror-vim)。
+
 ## 1.2 文件与工作区
 
 - 文件树支持复选框多选、Ctrl 点选、Shift 连选和全选可见条目；复制、剪切、粘贴、创建副本和批量删除都有确认及逐项结果。同名文件不覆盖；成功项保留，失败项明确显示。剪切失败项仍留在待移动列表。
@@ -57,7 +72,7 @@
 已提供多阶段 `Dockerfile` 和 [DaemonSet 部署说明](deploy/kubernetes/README.md)。镜像内含 Node.js 和 Linux PTY 模块，不要求目标节点安装 Node.js 或 npm。
 
 ```bash
-docker build -t ws-terminal:1.2.0 .
+docker build -t ws-terminal:1.3.0 .
 ```
 
 宿主机模式需要特权容器和宿主机 PID/网络命名空间：Terminal 进入宿主机环境，文件树访问同一宿主机文件系统。普通容器模式只操作容器自身，不能将容器内的 root 误认为宿主机 root。节点端口 8002 必须空闲，镜像 CPU 架构必须匹配；请按部署说明替换镜像地址、配置 Secret，并在目标集群验收。
@@ -119,15 +134,15 @@ bash scripts/prepare-offline-bundle.sh
 包名包含 CPU 架构、libc 和 Node ABI，例如：
 
 ```text
-ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz
+ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz
 ```
 
 同时会生成 SHA-256 文件。把两个文件传入内网服务器后执行：
 
 ```bash
-sha256sum -c ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
+sha256sum -c ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
 sudo mkdir -p /opt/ws-terminal
-sudo tar -xzf ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
+sudo tar -xzf ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
 cd /opt/ws-terminal
 bash scripts/check-offline-runtime.sh
 ```
@@ -265,6 +280,7 @@ WS_TERMINAL_PORT=8002
 | `WS_TERMINAL_REPLAY_BYTES` | `1048576` | 每个终端的内存输出回放上限 |
 | `WS_TERMINAL_MAX_TRANSFER_BYTES` | `104857600` | 单个上传/下载文件上限；Nginx 的 body 上限也需相应调整 |
 | `WS_TERMINAL_MAX_COPY_ENTRIES` | `10000` | 每批复制含目录在内的条目上限；复制总字节也受 MAX_TRANSFER_BYTES 限制 |
+| `WS_TERMINAL_MAX_PREVIEW_BYTES` | `20971520` | 图片/PDF 单文件预览上限，同时受 MAX_TRANSFER_BYTES 限制；文本预览仍受 MAX_FILE_BYTES 限制 |
 | `WS_TERMINAL_BACKUP_DIR` | `/var/lib/ws-terminal/backups` | 备份文件位置，含敏感内容，应保持仅 root 可读 |
 | `WS_TERMINAL_BACKUP_COUNT` | `10` | 每个路径保留版本数，`0` 禁用自动备份 |
 | `WS_TERMINAL_BACKUP_MAX_BYTES` | `268435456` | 所有备份数据的总容量上限 |
@@ -295,7 +311,7 @@ curl http://服务器IP:8002/api/health
 预期结果：
 
 ```json
-{"ok":true,"name":"ws-terminal","version":"1.2.0"}
+{"ok":true,"name":"ws-terminal","version":"1.3.0"}
 ```
 
 验证登录、WebSocket 和 PTY 命令链路：
@@ -318,7 +334,7 @@ sudo bash /opt/ws-terminal/scripts/smoke-installed.sh
 
 草稿不代替正式备份。加密密钥与密文均在服务器上，不能防御拥有服务器 root 权限的操作者；清空浏览器站点数据会丢失恢复标识。草稿过期后不能恢复，停止服务期间不会执行清理。请通过 HTTPS 保护传输。
 
-Linux 开发测试：`npm ci` 后运行 `npm run check`、`npm test`。浏览器验收还需在测试机单独安装 Playwright/浏览器，设置 `WS_TERMINAL_TEST_URL` 和 `WS_TERMINAL_TEST_TOKEN` 后执行 `npm run smoke:browser`、`npm run smoke:workflows`、`npm run smoke:workspace`。最后一套覆盖多选、移动冲突、另存为、部分保存失败、标签总览、专注恢复、指定目录终端和导航补全。可通过 `WS_TERMINAL_PLAYWRIGHT_PATH` 指定现有 `playwright-core` 模块，通过 `WS_TERMINAL_BROWSER_PATH` 指定浏览器，截图默认写入忽略提交的 `test-results/`。这些是测试依赖，不是离线运行依赖。
+Linux 开发测试：`npm ci` 后运行 `npm run build`、`npm run check`、`npm test`。浏览器验收还需在测试机单独安装 Playwright/浏览器，设置 `WS_TERMINAL_TEST_URL` 和 `WS_TERMINAL_TEST_TOKEN` 后执行 `npm run smoke:browser`、`npm run smoke:workflows`、`npm run smoke:workspace`、`npm run smoke:previews`。预览验收覆盖独立登录、设置持久化、键位与缩进、Markdown 隔离、JSON/CSV 安全、图片及 PDF 实际像素和翻页，并检查没有外网请求。可通过 `WS_TERMINAL_PLAYWRIGHT_PATH` 指定现有 `playwright-core` 模块，通过 `WS_TERMINAL_BROWSER_PATH` 指定浏览器，截图默认写入忽略提交的 `test-results/`。这些是测试依赖，不是离线运行依赖。
 
 前端打包组件的许可证见 [第三方声明](public/assets/THIRD-PARTY-NOTICES.txt)。实际令牌、运行配置、依赖目录、离线包和截图不应提交到源码仓库。
 

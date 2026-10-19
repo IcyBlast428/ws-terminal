@@ -44,6 +44,7 @@ printf '%s\n' \
 trap 'rm -f "$BUILD_INFO"' EXIT
 
 tar \
+  --mode='go-w' \
   --exclude='.git' \
   --exclude='*.log' \
   --exclude='dist' \

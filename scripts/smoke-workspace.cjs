@@ -41,7 +41,8 @@ async function main() {
     for (const endpoint of ['batch', 'save-as']) assert.equal((await context.request.post(`${baseURL}/api/filesystem/${endpoint}`, { data: {} })).status(), 401);
     await page.goto(baseURL);
     await page.getByRole('textbox', { name: '访问令牌', exact: true }).fill(token); await page.getByRole('button', { name: '登录', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('#nodeIdentity').textContent.includes('root'));
+    await page.waitForURL(url => url.pathname === '/');
+    await page.waitForFunction(() => document.querySelector('#nodeIdentity')?.textContent.includes('root'));
     for (const endpoint of ['batch', 'save-as']) assert.equal((await context.request.post(`${baseURL}/api/filesystem/${endpoint}`, { headers: { Origin: 'https://untrusted.invalid' }, data: {} })).status(), 403);
     assert.equal(await page.locator('.terminal-pane').count(), 0);
     await mutate('create-directory', '/tmp', path.posix.basename(fixture));

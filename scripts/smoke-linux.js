@@ -192,6 +192,10 @@ async function exerciseFileOperations(cookie) {
     await mutate('create-directory', root, 'source'); await mutate('create-directory', root, 'destination');
     const content = '\uFEFFbatch smoke\r\n\r\n';
     await requestJson('/api/filesystem/save-as', cookie, { method: 'POST', body: { path: `${root}/source/.hidden`, content } });
+    const pdfContent = '%PDF-1.4\npreview smoke\n';
+    await requestJson('/api/filesystem/save-as', cookie, { method: 'POST', body: { path: `${root}/source/sample.pdf`, content: pdfContent } });
+    const preview = await request(`/api/filesystem/preview?path=${encodeURIComponent(root + '/source/sample.pdf')}`, { headers: { Cookie: cookie, Origin: baseUrl.origin } });
+    if (preview.statusCode !== 200 || preview.headers['content-type'] !== 'application/pdf' || preview.body !== pdfContent || !preview.headers['content-disposition']?.startsWith('attachment;')) throw new Error('Protected preview did not preserve bytes or attachment headers');
     const copied = await batch('copy', [`${root}/source`], `${root}/destination`);
     if (!copied.results[0].ok) throw new Error(`Directory copy failed: ${JSON.stringify(copied)}`);
     const result = await requestJson('/api/filesystem/read', cookie, { method: 'POST', body: { path: `${root}/destination/source/.hidden` } });
@@ -314,6 +318,9 @@ async function main() {
   if (health.statusCode !== 200) {
     throw new Error(`Health check failed with HTTP ${health.statusCode}`);
   }
+  const anonymousPage = await request('/');
+  if (anonymousPage.statusCode !== 303 || anonymousPage.headers.location !== '/login') throw new Error('Workbench is not gated by the dedicated login page');
+  for (const asset of ['/login', '/assets/auth.bundle.js', '/assets/previews.bundle.js', '/assets/pdf/pdf.mjs', '/assets/pdf/pdf.worker.mjs']) if ((await request(asset)).statusCode !== 200) throw new Error(`Offline preview asset missing: ${asset}`);
 
   const unauthorizedDrafts = await request('/api/drafts', { headers: { 'X-Draft-Vault': 'a'.repeat(64) } });
   if (unauthorizedDrafts.statusCode !== 401) throw new Error('Draft API is not protected by authentication');

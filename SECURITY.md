@@ -1,0 +1,13 @@
+# Security Model
+
+WS Terminal is an administrative root terminal, not a sandbox or a multi-tenant hosting service. In host mode, a valid access token grants control of the Linux node, including the ability to read and change the service itself and its credentials.
+
+- Restrict access to trusted administrative networks. Use HTTPS at the reverse proxy and a strong, unique token. Do not expose the service directly to the public Internet.
+- Keep actual environment files, tokens, certificates, backup contents, draft keys and terminal output out of Git, issues, screenshots and public logs. Use the supplied example files only as templates.
+- Authentication exchanges the configured token for an opaque HttpOnly session cookie. Terminal ownership is tied to that login session. Everyone using the shared token still has the same operating-system privileges; this does not identify individual administrators.
+- Network reconnection preserves a PTY only within its grace period. Restarting the service, container or Pod ends its terminal sessions. Explicitly closing a terminal ends its PTY; processes deliberately detached with tools such as `nohup` may outlive it.
+- Text saves and overwrite uploads use conflict checks and backups, but they are not transactions against arbitrary concurrent host processes. Backups are not a substitute for an independent backup system.
+- Optional drafts are encrypted with AES-256-GCM on the server and require both an authenticated request and a browser vault identifier. Browser storage contains no draft plaintext. The encryption key and ciphertext live on the same server, so this does not protect against a privileged host operator. Drafts have finite retention and capacity and cannot guarantee the recovery of edits not yet acknowledged by the server.
+- Kubernetes host mode deliberately uses a privileged container and host namespaces. Review the target cluster's admission policy, network access, runtime and node architecture before deployment. Local container tests are not cluster acceptance.
+
+Do not publish credentials or sensitive host details when reporting an issue. If private vulnerability reporting is enabled on the repository, use it for security-sensitive reports; otherwise first open an issue requesting a private reporting channel without disclosing exploit details or secrets.

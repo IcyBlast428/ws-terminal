@@ -1,0 +1,24 @@
+[Unit]
+Description=WS Terminal
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/ws-terminal
+EnvironmentFile=/etc/ws-terminal/ws-terminal.env
+ExecStart=/usr/bin/node /opt/ws-terminal/server/src/index.js
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+TasksMax=512
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

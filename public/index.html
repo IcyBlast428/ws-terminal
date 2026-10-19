@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WS Terminal</title>
+    <link rel="stylesheet" href="/vendor/xterm.css" />
+    <link rel="stylesheet" href="/assets/app.css?v=1.1.0" />
+  </head>
+  <body>
+    <main class="shell-page">
+      <header class="topbar">
+        <div class="topbar-leading">
+          <button class="sidebar-toggle" id="sidebarToggleButton" type="button" title="隐藏目录" aria-label="隐藏目录" aria-expanded="true">
+            <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+          </button>
+          <div class="brand">
+            <span class="status-dot" id="statusDot"></span>
+            <span class="title" id="title">WS Terminal</span>
+            <span class="node-identity" id="nodeIdentity"></span>
+            <span class="meta" id="meta"></span>
+          </div>
+        </div>
+        <form class="controls" id="connectForm" autocomplete="off">
+          <input id="tokenInput" name="token" type="password" placeholder="访问令牌" aria-label="访问令牌" />
+          <button id="connectButton" type="submit">登录</button>
+          <button id="disconnectButton" type="button" title="结束当前终端进程">结束终端</button>
+          <button id="logoutButton" type="button">退出</button>
+          <button class="icon-button" id="sessionsButton" type="button" title="终端会话" aria-label="终端会话" data-icon="sessions"></button>
+          <button class="icon-button" id="auditButton" type="button" title="操作记录" aria-label="操作记录" data-icon="audit"></button>
+          <button class="icon-button" id="draftsButton" type="button" title="短期草稿" aria-label="短期草稿" data-icon="draft"></button>
+          <div class="font-size-control" aria-label="终端字号">
+            <button id="decreaseFontButton" type="button" title="减小终端字号" aria-label="减小终端字号">−</button>
+            <output id="fontSizeValue" aria-live="polite">14</output>
+            <button id="increaseFontButton" type="button" title="增大终端字号" aria-label="增大终端字号">+</button>
+          </div>
+        </form>
+      </header>
+      <div class="workspace" id="workspace">
+        <aside class="file-explorer" id="fileExplorer" aria-label="目录结构">
+          <div class="explorer-header">
+            <div class="explorer-heading">
+              <span class="explorer-title">目录</span>
+              <span class="cwd-path" id="cwdPath">等待连接</span>
+            </div>
+            <div class="explorer-actions">
+              <button class="icon-button" id="createFileButton" type="button" title="新建文件" aria-label="新建文件"><span class="icon file-add-icon"></span></button>
+              <button class="icon-button" id="createDirectoryButton" type="button" title="新建目录" aria-label="新建目录"><span class="icon folder-add-icon"></span></button>
+              <button class="icon-button refresh-icon" id="refreshTreeButton" type="button" title="刷新目录" aria-label="刷新目录">↻</button>
+            </div>
+          </div>
+          <form class="explorer-navigation" id="pathForm">
+            <input id="pathInput" aria-label="目录路径" value="/" autocomplete="off" />
+            <button type="submit" class="icon-button" aria-label="跳转目录" title="跳转目录" data-icon="right"></button>
+          </form>
+          <div class="explorer-filters">
+            <input id="treeFilter" type="search" aria-label="筛选目录条目" placeholder="筛选名称" />
+            <button class="icon-button" id="hiddenButton" type="button" title="显示隐藏文件" aria-label="显示隐藏文件" aria-pressed="false" data-icon="hidden"></button>
+            <button class="icon-button" id="uploadButton" type="button" title="上传文件" aria-label="上传文件" data-icon="upload"></button>
+          </div>
+          <div class="explorer-search-scope"><select id="treeSearchMode" aria-label="目录搜索范围"><option value="local">筛选已加载条目</option><option value="remote">搜索当前目录全部条目</option></select></div>
+          <div id="treeSummary" class="tree-summary" role="status"></div>
+          <div class="bookmarks" id="bookmarks"></div>
+          <div class="transfer-status" id="transferStatus" hidden></div>
+          <nav class="directory-tree" id="directoryTree" aria-label="服务器目录树">
+            <div class="tree-placeholder">连接终端后显示目录</div>
+          </nav>
+        </aside>
+        <div class="explorer-resizer" id="explorerResizer" role="separator" aria-label="调整目录宽度" aria-orientation="vertical" tabindex="0"></div>
+        <section class="workbench" aria-label="终端和文本文件">
+          <div class="layout-root" id="layoutRoot"></div>
+        </section>
+      </div>
+    </main>
+    <div class="context-menu" id="treeContextMenu" role="menu" hidden>
+      <button type="button" data-action="create-file" role="menuitem">新建文件</button>
+      <button type="button" data-action="create-directory" role="menuitem">新建目录</button>
+      <button type="button" data-action="rename" role="menuitem">重命名</button>
+      <button type="button" data-action="download" role="menuitem">下载</button>
+      <button type="button" data-action="bookmark" role="menuitem">收藏目录</button>
+      <button type="button" data-action="properties" role="menuitem">属性</button>
+      <button type="button" data-action="size" role="menuitem">计算目录大小</button>
+      <button type="button" class="danger" data-action="delete" role="menuitem">删除</button>
+    </div>
+    <dialog class="entry-dialog" id="entryDialog">
+      <form id="entryForm" autocomplete="off">
+        <h2 id="entryDialogTitle">新建文件</h2>
+        <label for="entryNameInput">名称</label>
+        <input id="entryNameInput" maxlength="255" required />
+        <p class="dialog-error" id="entryDialogError" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="entryCancelButton" type="button">取消</button>
+          <button class="primary-button" type="submit">确认</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog class="utility-dialog" id="utilityDialog">
+      <header><h2 id="utilityTitle"></h2><button class="icon-button" id="utilityClose" type="button" aria-label="关闭窗口" title="关闭窗口" data-icon="close"></button></header>
+      <div id="utilityBody"></div>
+      <footer id="utilityActions"></footer>
+    </dialog>
+    <div class="notifications" id="notifications" role="status" aria-live="polite"></div>
+    <input id="uploadInput" type="file" multiple hidden />
+    <dialog class="entry-dialog" id="deleteDialog">
+      <form id="deleteForm">
+        <h2>确认删除</h2>
+        <p id="deleteMessage"></p>
+        <p class="dialog-note">目录仅在为空时可以删除。</p>
+        <p class="dialog-error" id="deleteDialogError" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="deleteCancelButton" type="button">取消</button>
+          <button class="danger-button" type="submit">删除</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/addon-fit.js"></script>
+    <script src="/assets/editor.bundle.js?v=1.1.0"></script>
+    <script src="/assets/workbench-model.js?v=1.1.0"></script>
+    <script src="/assets/app.js?v=1.1.0"></script>
+  </body>
+</html>

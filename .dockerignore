@@ -1,0 +1,8 @@
+node_modules
+.env
+*.tgz
+*.sha256
+*.log
+.git
+.qa
+test

@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ws-terminal
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ws-terminal
+  namespace: ws-terminal
+spec:
+  selector:
+    matchLabels:
+      app: ws-terminal
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  template:
+    metadata:
+      labels:
+        app: ws-terminal
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: terminal
+          image: registry.internal.example/ws-terminal:1.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          env:
+            - name: WS_TERMINAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ws-terminal-access
+                  key: token
+            - name: WS_TERMINAL_HOST_MODE
+              value: "1"
+            - name: WS_TERMINAL_SHELL
+              value: /bin/bash
+            - name: WS_TERMINAL_CWD
+              value: /root
+            - name: WS_TERMINAL_PORT
+              value: "8002"
+            - name: WS_TERMINAL_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: WS_TERMINAL_NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          ports:
+            - name: http
+              containerPort: 8002
+              hostPort: 8002
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/ws-terminal
+      volumes:
+        - name: state
+          hostPath:
+            path: /var/lib/ws-terminal
+            type: DirectoryOrCreate

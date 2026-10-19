@@ -4,6 +4,31 @@
 
 运行时不访问 CDN 或互联网。前端使用项目内的 `xterm.js`、CodeMirror 和 Lucide 图标，后端使用 Node.js、`ws` 和 `node-pty`。
 
+## 1.2 文件与工作区
+
+- 文件树支持复选框多选、Ctrl 点选、Shift 连选和全选可见条目；复制、剪切、粘贴、创建副本和批量删除都有确认及逐项结果。同名文件不覆盖；成功项保留，失败项明确显示。剪切失败项仍留在待移动列表。
+- 文件与目录都可复制；目录复制包括隐藏文件，保留符号链接本身而不跟随链接，不跨挂载文件系统，不复制设备、管道等特殊文件。每批默认限制 100 个源条目、10000 个内部条目、合计 100 MiB 和 30 秒。复制先写入目标目录内的私有临时目录，成功后发布；失败清理临时文件。操作不是整个文件系统的快照或多文件事务。
+- 文件或目录移动仅支持同一文件系统，保留原 inode；移动后已打开的文件标签跟随新路径。复制权限位但不继承源文件所有权或扩展属性。批量删除仍只删除文件、链接和空目录，不递归删除。
+- 路径栏支持目录候选补全，只有一个候选时可用 Tab 补全；面包屑可直接跳转上级。可复制文件或目录的完整路径，并从目录菜单启动以该目录为工作目录的终端；不会向 shell 拼接 `cd` 命令，也不会恢复终端与目录树的自动联动。
+- 文本文件支持“另存为”和“保存全部”。另存为只创建新文件，不覆盖已有目标，保留 BOM、换行格式和末尾空行；当前标签转到新路径，原文件不变。保存全部逐个校验版本，冲突项保留编辑内容，不影响其他文件保存。
+- 标签总览支持搜索已打开的文件和终端、按分屏定位，以及重新打开本页最近关闭的 20 个文件。关闭的终端不会被恢复；终端名称可双击标签或通过命令面板修改。最近关闭记录与终端名称仅在当前页面有效，不保存正文。
+- 每个分屏右上角可进入专注模式，退出时保留原布局和比例；不会重建编辑器或终端进程。Escape 可退出专注模式。
+- 命令面板集中提供工作区操作并显示快捷键，不接收或执行任意 shell 命令。终端里的 Ctrl+C、Ctrl+V、Ctrl+S 等原有行为不被全局接管；文件多选的 Ctrl+C/X/V/A 仅在文件树区域生效，不影响路径输入和编辑器。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `Ctrl+Shift+P` | 命令面板 |
+| `Ctrl+Alt+P` | 标签总览 |
+| `Ctrl+Alt+T` | 新建终端 |
+| `Ctrl+S` / `Ctrl+Shift+S` | 保存当前文件 / 另存为，仅在文件标签有效 |
+| `Ctrl+Alt+S` | 保存全部 |
+| `Ctrl+Alt+L` | 聚焦目录路径栏 |
+| `Ctrl+Alt+B` | 显示或隐藏目录树 |
+| `Ctrl+Alt+M` | 专注当前分屏 / 恢复布局 |
+| `Ctrl+Alt+W` | 关闭当前标签，终端会结束进程 |
+
+移动和复制发布使用系统自带的 GNU `/usr/bin/mv`（无 shell 插值、禁止覆盖）；Linux 系统或精简镜像需包含 GNU coreutils。全部前端资源仍随项目离线提供。
+
 ## 1.1 使用流程改进
 
 - 刷新后不自动创建终端；会话列表显示剩余保留时间，可手动恢复同一个 PTY。接管已连接会话前需要确认。服务或 Pod 重启仍会结束会话。
@@ -32,7 +57,7 @@
 已提供多阶段 `Dockerfile` 和 [DaemonSet 部署说明](deploy/kubernetes/README.md)。镜像内含 Node.js 和 Linux PTY 模块，不要求目标节点安装 Node.js 或 npm。
 
 ```bash
-docker build -t ws-terminal:1.1.0 .
+docker build -t ws-terminal:1.2.0 .
 ```
 
 宿主机模式需要特权容器和宿主机 PID/网络命名空间：Terminal 进入宿主机环境，文件树访问同一宿主机文件系统。普通容器模式只操作容器自身，不能将容器内的 root 误认为宿主机 root。节点端口 8002 必须空闲，镜像 CPU 架构必须匹配；请按部署说明替换镜像地址、配置 Secret，并在目标集群验收。
@@ -94,15 +119,15 @@ bash scripts/prepare-offline-bundle.sh
 包名包含 CPU 架构、libc 和 Node ABI，例如：
 
 ```text
-ws-terminal-1.1.0-linux-x86_64-glibc-nodeabi137-offline.tgz
+ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz
 ```
 
 同时会生成 SHA-256 文件。把两个文件传入内网服务器后执行：
 
 ```bash
-sha256sum -c ws-terminal-1.1.0-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
+sha256sum -c ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
 sudo mkdir -p /opt/ws-terminal
-sudo tar -xzf ws-terminal-1.1.0-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
+sudo tar -xzf ws-terminal-1.2.0-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
 cd /opt/ws-terminal
 bash scripts/check-offline-runtime.sh
 ```
@@ -239,6 +264,7 @@ WS_TERMINAL_PORT=8002
 | `WS_TERMINAL_RECONNECT_GRACE_SECONDS` | `300` | 断线后保留 PTY 的时间，不跨服务重启 |
 | `WS_TERMINAL_REPLAY_BYTES` | `1048576` | 每个终端的内存输出回放上限 |
 | `WS_TERMINAL_MAX_TRANSFER_BYTES` | `104857600` | 单个上传/下载文件上限；Nginx 的 body 上限也需相应调整 |
+| `WS_TERMINAL_MAX_COPY_ENTRIES` | `10000` | 每批复制含目录在内的条目上限；复制总字节也受 MAX_TRANSFER_BYTES 限制 |
 | `WS_TERMINAL_BACKUP_DIR` | `/var/lib/ws-terminal/backups` | 备份文件位置，含敏感内容，应保持仅 root 可读 |
 | `WS_TERMINAL_BACKUP_COUNT` | `10` | 每个路径保留版本数，`0` 禁用自动备份 |
 | `WS_TERMINAL_BACKUP_MAX_BYTES` | `268435456` | 所有备份数据的总容量上限 |
@@ -269,7 +295,7 @@ curl http://服务器IP:8002/api/health
 预期结果：
 
 ```json
-{"ok":true,"name":"ws-terminal","version":"1.1.0"}
+{"ok":true,"name":"ws-terminal","version":"1.2.0"}
 ```
 
 验证登录、WebSocket 和 PTY 命令链路：
@@ -292,7 +318,7 @@ sudo bash /opt/ws-terminal/scripts/smoke-installed.sh
 
 草稿不代替正式备份。加密密钥与密文均在服务器上，不能防御拥有服务器 root 权限的操作者；清空浏览器站点数据会丢失恢复标识。草稿过期后不能恢复，停止服务期间不会执行清理。请通过 HTTPS 保护传输。
 
-Linux 开发测试：`npm ci` 后运行 `npm run check`、`npm test`。浏览器验收还需在测试机单独安装 Playwright/浏览器，设置 `WS_TERMINAL_TEST_URL` 和 `WS_TERMINAL_TEST_TOKEN` 后执行 `npm run smoke:browser`、`npm run smoke:workflows`。可通过 `WS_TERMINAL_PLAYWRIGHT_PATH` 指定现有 `playwright-core` 模块，通过 `WS_TERMINAL_BROWSER_PATH` 指定浏览器，截图默认写入忽略提交的 `test-results/`。这些是测试依赖，不是离线运行依赖。
+Linux 开发测试：`npm ci` 后运行 `npm run check`、`npm test`。浏览器验收还需在测试机单独安装 Playwright/浏览器，设置 `WS_TERMINAL_TEST_URL` 和 `WS_TERMINAL_TEST_TOKEN` 后执行 `npm run smoke:browser`、`npm run smoke:workflows`、`npm run smoke:workspace`。最后一套覆盖多选、移动冲突、另存为、部分保存失败、标签总览、专注恢复、指定目录终端和导航补全。可通过 `WS_TERMINAL_PLAYWRIGHT_PATH` 指定现有 `playwright-core` 模块，通过 `WS_TERMINAL_BROWSER_PATH` 指定浏览器，截图默认写入忽略提交的 `test-results/`。这些是测试依赖，不是离线运行依赖。
 
 前端打包组件的许可证见 [第三方声明](public/assets/THIRD-PARTY-NOTICES.txt)。实际令牌、运行配置、依赖目录、离线包和截图不应提交到源码仓库。
 

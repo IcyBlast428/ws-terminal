@@ -135,6 +135,7 @@ function readConfig(argv = process.argv, env = process.env) {
     reconnectGraceMs: intValue(env.WS_TERMINAL_RECONNECT_GRACE_SECONDS, 300, 5, 3600) * 1000,
     replayBytes: intValue(env.WS_TERMINAL_REPLAY_BYTES, 1048576, 65536, 8388608),
     maxTransferBytes: intValue(env.WS_TERMINAL_MAX_TRANSFER_BYTES, 104857600, 1024, 1073741824),
+    maxCopyEntries: intValue(env.WS_TERMINAL_MAX_COPY_ENTRIES, 10000, 1, 100000),
     backupDir: path.resolve(env.WS_TERMINAL_BACKUP_DIR || '/var/lib/ws-terminal/backups'),
     backupCount: intValue(env.WS_TERMINAL_BACKUP_COUNT, 10, 0, 100),
     backupMaxBytes: intValue(env.WS_TERMINAL_BACKUP_MAX_BYTES, 268435456, 1048576, 1073741824),

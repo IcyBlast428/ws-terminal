@@ -1,17 +1,18 @@
 {
   "name": "ws-terminal",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Offline LAN web terminal service for Linux servers.",
   "main": "server/src/index.js",
   "scripts": {
     "build": "node scripts/build-assets.mjs",
     "start": "node server/src/index.js",
-    "check": "node --check server/src/env-file.js && node --check server/src/config.js && node --check server/src/auth.js && node --check server/src/logger.js && node --check server/src/static.js && node --check server/src/filesystem-context.js && node --check server/src/file-service.js && node --check server/src/draft-store.js && node --check server/src/terminal-manager.js && node --check server/src/index.js && node --check public/assets/workbench-model.js && node --check public/assets/app.js",
+    "check": "node --check server/src/env-file.js && node --check server/src/config.js && node --check server/src/auth.js && node --check server/src/logger.js && node --check server/src/static.js && node --check server/src/filesystem-context.js && node --check server/src/file-service.js && node --check server/src/file-operations.js && node --check server/src/draft-store.js && node --check server/src/terminal-manager.js && node --check server/src/index.js && node --check public/assets/workbench-model.js && node --check public/assets/app.js",
     "test": "node --test test/*.test.js",
     "smoke:linux": "node scripts/smoke-linux.js",
     "smoke:browser": "node scripts/smoke-browser.cjs",
-    "smoke:workflows": "node scripts/smoke-workflows.cjs"
+    "smoke:workflows": "node scripts/smoke-workflows.cjs",
+    "smoke:workspace": "node scripts/smoke-workspace.cjs"
   },
   "engines": {
     "node": ">=20"

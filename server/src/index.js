@@ -200,6 +200,13 @@ function handleFilesystemApi(req, res, url, config, auth, limiter, fileService) 
       }
       return fileService.write(payload.path, payload.content, payload.expectedVersion);
     });
+  } else if (url.pathname === '/api/filesystem/save-as' && req.method === 'POST') {
+    operation = readJson(req, config.maxClientMessageBytes).then(payload => {
+      if (!payload || typeof payload.path !== 'string' || typeof payload.content !== 'string') throw Object.assign(new Error('Invalid Save As request'), { code: 'EINVAL' });
+      return fileService.saveAs(payload.path, payload.content);
+    });
+  } else if (url.pathname === '/api/filesystem/batch' && req.method === 'POST') {
+    operation = readJson(req, 65536).then(payload => fileService.operations.batch(payload));
   } else if (url.pathname === '/api/filesystem/mutate' && req.method === 'POST') {
     operation = readJson(req).then((payload) => {
       if (typeof payload.path !== 'string' || (payload.name !== undefined && typeof payload.name !== 'string')) {
@@ -229,7 +236,11 @@ function handleFilesystemApi(req, res, url, config, auth, limiter, fileService) 
   limiter.active += 1;
   operation.then((result) => {
     const source = { remoteAddress: getClientAddress(req, config.trustProxy), transport: 'http' };
-    if (url.pathname === '/api/filesystem/write' || url.pathname === '/api/filesystem/restore') {
+    if (url.pathname === '/api/filesystem/batch') {
+      logger.log('filesystem.batch', { operation: result.operation, results: result.results, ...source });
+    } else if (url.pathname === '/api/filesystem/save-as') {
+      logger.log('filesystem.saved_as', { path: result.path, size: result.size, ...source });
+    } else if (url.pathname === '/api/filesystem/write' || url.pathname === '/api/filesystem/restore') {
       logger.log(url.pathname.endsWith('/restore') ? 'filesystem.restored' : 'filesystem.file_saved', { path: result.path, size: result.size, ...source });
     } else if (url.pathname === '/api/filesystem/mutate') {
       logger.log('filesystem.mutated', { ...result, ...source });
@@ -363,7 +374,7 @@ function main() {
     maxPayload: config.maxClientMessageBytes
   });
 
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     let url;
     try {
       url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -394,12 +405,31 @@ function main() {
       return;
     }
 
+    let cwd = null;
+    if (!resumeId && url.searchParams.has('cwd')) {
+      if (filesystemLimiter.active >= filesystemLimiter.maximum) { rejectUpgrade(socket, 429, 'Too many filesystem requests'); return; }
+      filesystemLimiter.active++;
+      const onError = () => {};
+      socket.on('error', onError);
+      try {
+        const directory = await fileService.metadata(url.searchParams.get('cwd'));
+        if (directory.type !== 'directory') throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' });
+        cwd = directory.path;
+      } catch (error) {
+        if (!socket.destroyed) rejectUpgrade(socket, filesystemStatus(error), 'Invalid terminal working directory');
+        return;
+      } finally { filesystemLimiter.active--; socket.removeListener('error', onError); }
+    }
+    if (socket.destroyed) return;
+    if (config.auth.required && auth.getSessionId(req) !== authSessionId) { rejectUpgrade(socket, 401, 'Unauthorized'); return; }
+    if (!resumeId && !terminalManager.canCreateSession()) { rejectUpgrade(socket, 429, 'Too many sessions'); return; }
+    // Validate before the handshake so the first input frame cannot arrive before PTY listeners.
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, url, authSessionId);
+      wss.emit('connection', ws, req, url, authSessionId, cwd);
     });
   });
 
-  wss.on('connection', (ws, req, url, authSessionId) => {
+  wss.on('connection', (ws, req, url, authSessionId, cwd) => {
     ws.isAlive = true;
     ws.on('pong', () => {
       ws.isAlive = true;
@@ -411,7 +441,12 @@ function main() {
         if (!terminal) { ws.close(1000, 'terminal session expired'); return; }
         const after = Math.max(0, Number(url.searchParams.get('after')) || 0);
         terminal.attach(ws, after, true);
-      } else terminalManager.createSession(ws, url, req, getClientAddress(req, config.trustProxy), authSessionId);
+      } else {
+        if (ws.readyState !== 1) return;
+        if (config.auth.required && auth.getSessionId(req) !== authSessionId) { ws.close(1008, 'terminal session expired'); return; }
+        if (!terminalManager.canCreateSession()) { ws.close(1008, 'Too many sessions'); return; }
+        terminalManager.createSession(ws, url, req, getClientAddress(req, config.trustProxy), authSessionId, cwd);
+      }
     } catch (err) {
       logger.error('terminal.spawn_failed', err, { remoteAddress: getClientAddress(req, config.trustProxy) });
       ws.close(1011, 'Failed to start shell');

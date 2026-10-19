@@ -36,7 +36,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: terminal
-          image: registry.internal.example/ws-terminal:1.1.0
+          image: registry.internal.example/ws-terminal:1.2.0
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true

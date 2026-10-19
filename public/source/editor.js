@@ -12,7 +12,7 @@ import { python } from '@codemirror/lang-python';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { properties } from '@codemirror/legacy-modes/mode/properties';
 import { diffLines } from 'diff';
-import { createElement, PanelLeft, FilePlus2, FolderPlus, RefreshCw, Upload, Download, Search, Eye, EyeOff, Star, Info, History, GitCompareArrows, GitMerge, FileClock, Save, List, ScrollText, X, Folder, File, FileCode2, FileCog, FileText, Image, FileArchive, Link, ChevronRight, ChevronDown, Ellipsis } from 'lucide';
+import { createElement, PanelLeft, FilePlus2, FolderPlus, RefreshCw, Upload, Download, Search, Eye, EyeOff, Star, Info, History, GitCompareArrows, GitMerge, FileClock, Save, List, ScrollText, X, Folder, File, FileCode2, FileCog, FileText, Image, FileArchive, Link, ChevronRight, ChevronDown, Ellipsis, Copy, Scissors, ClipboardPaste, Files, Trash2, Terminal, Maximize2, Minimize2, Command, PanelsTopLeft, SaveAll, FilePenLine, Pencil, ArrowUp } from 'lucide';
 
 function language(filePath) {
   if (/\.(?:js|mjs|cjs|jsx|ts|tsx)$/i.test(filePath)) return javascript({ typescript: /\.tsx?$/i.test(filePath), jsx: /\.[jt]sx$/i.test(filePath) });
@@ -29,8 +29,9 @@ window.WorkbenchEditor = {
     const host = document.createElement('div');
     host.className = 'file-editor';
     const editable = new Compartment();
+    const syntax = new Compartment();
     const view = new EditorView({ parent: host, state: EditorState.create({ doc: '', extensions: [
-      basicSetup, language(filePath), keymap.of([indentWithTab]), editable.of(EditorView.editable.of(true)),
+      basicSetup, syntax.of(language(filePath)), keymap.of([indentWithTab]), editable.of(EditorView.editable.of(true)),
       syntaxHighlighting(HighlightStyle.define([
         { tag: tags.keyword, color: '#c7acdf' }, { tag: [tags.string, tags.regexp], color: '#a7d7af' },
         { tag: [tags.number, tags.bool, tags.null], color: '#e2bf78' }, { tag: tags.comment, color: '#82928a', fontStyle: 'italic' },
@@ -53,6 +54,7 @@ window.WorkbenchEditor = {
     host.focus = () => view.focus();
     host.search = () => openSearchPanel(view);
     host.gotoLine = () => gotoLine(view);
+    host.setPath = filePath => view.dispatch({ effects: syntax.reconfigure(language(filePath)) });
     host.destroy = () => view.destroy();
     host.remeasure = () => view.requestMeasure();
     return host;
@@ -63,5 +65,7 @@ window.WorkbenchEditor = {
 const icons = { panel: PanelLeft, 'file-add': FilePlus2, 'folder-add': FolderPlus, refresh: RefreshCw, upload: Upload, download: Download,
   search: Search, hidden: Eye, visible: EyeOff, star: Star, info: Info, history: History, compare: GitCompareArrows, save: Save,
   sessions: List, audit: ScrollText, draft: FileClock, merge: GitMerge, close: X, directory: Folder, file: File, code: FileCode2, config: FileCog, text: FileText,
-  image: Image, archive: FileArchive, symlink: Link, other: File, right: ChevronRight, down: ChevronDown, more: Ellipsis };
+  image: Image, archive: FileArchive, symlink: Link, other: File, right: ChevronRight, down: ChevronDown, more: Ellipsis,
+  copy: Copy, cut: Scissors, paste: ClipboardPaste, duplicate: Files, delete: Trash2, terminal: Terminal, maximize: Maximize2, minimize: Minimize2,
+  command: Command, tabs: PanelsTopLeft, 'save-all': SaveAll, 'save-as': FilePenLine, rename: Pencil, up: ArrowUp };
 window.WorkbenchIcons = (name) => createElement(icons[name] || File, { width: 16, height: 16, 'stroke-width': 1.6, 'aria-hidden': 'true' });

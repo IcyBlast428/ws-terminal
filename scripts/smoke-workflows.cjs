@@ -27,7 +27,7 @@ async function main() {
   const write = async content => { const current = await read(); return json('/api/filesystem/write', { method: 'POST', data: { path: file, content, expectedVersion: current.version } }); };
   const editor = () => page.locator('.file-pane.active > .file-editor .cm-content');
   const navigate = async () => {
-    await page.getByRole('textbox', { name: '目录路径', exact: true }).fill(fixture);
+    await page.getByLabel('目录路径', { exact: true }).fill(fixture);
     await page.getByRole('button', { name: '跳转目录', exact: true }).click();
     await page.getByRole('treeitem', { name: 'note.conf', exact: true }).waitFor();
   };

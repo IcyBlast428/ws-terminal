@@ -5,6 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
+const { Readable } = require('node:stream');
+const { FileOperations } = require('./file-operations');
 const { physicalPath } = require('./filesystem-context');
 const { normalizeDirectoryPath, readTextFile, writeTextFile } = require('./terminal-manager');
 
@@ -19,7 +21,15 @@ function fingerprint(stat) {
 }
 
 class FileService {
-  constructor(config) { this.config = config; this.locks = new Map(); this.backupQueue = Promise.resolve(); }
+  constructor(config) { this.config = config; this.locks = new Map(); this.backupQueue = Promise.resolve(); this.operations = new FileOperations(config); }
+
+  async saveAs(value, content) {
+    if (typeof content !== 'string') throw Object.assign(new Error('Invalid text content'), { code: 'EINVAL' });
+    if (Buffer.byteLength(content) > this.config.maxFileBytes) throw Object.assign(new Error('Text exceeds the editor limit'), { code: 'EFBIG' });
+    if (content.includes('\0')) throw Object.assign(new Error('Not a regular text file'), { code: 'EISBINARY' });
+    await this.upload(value, Readable.from([Buffer.from(content)]), false);
+    return readTextFile(value, this.config.maxFileBytes);
+  }
 
   async locked(value, operation) {
     const key = await physicalPath(validPath(value));
@@ -157,7 +167,7 @@ class FileService {
   async upload(value, req, overwrite, expectedFingerprint) {
     return this.locked(value, async () => {
       const filePath = validPath(value);
-      const diskPath = await physicalPath(filePath);
+      const diskPath = await physicalPath(filePath, overwrite);
       const temporary = path.join(path.dirname(diskPath), `.ws-terminal-upload-${crypto.randomUUID()}`);
       let bytes = 0;
       const counter = new Transform({ transform: (chunk, encoding, callback) => {

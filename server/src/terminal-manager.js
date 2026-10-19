@@ -407,11 +407,13 @@ class TerminalManager {
     return this.size() < this.config.maxSessions;
   }
 
-  createSession(ws, requestUrl, req, remoteAddress, authSessionId = null) {
+  createSession(ws, requestUrl, req, remoteAddress, authSessionId = null, startCwd = null) {
     const id = crypto.randomUUID();
     const cols = clamp(requestUrl.searchParams.get('cols'), this.config.defaultCols, 20, 500);
     const rows = clamp(requestUrl.searchParams.get('rows'), this.config.defaultRows, 5, 200);
-    const cwd = resolveCwd(this.config.cwd);
+    const requestedCwd = startCwd || this.config.cwd;
+    if (startCwd && !this.config.hostMode && !fs.statSync(startCwd).isDirectory()) throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' });
+    const cwd = this.config.hostMode ? requestedCwd : resolveCwd(requestedCwd);
     const startedAt = new Date();
     let closed = false;
     let idleTimer = null;
@@ -433,7 +435,7 @@ class TerminalManager {
 
     const shell = this.config.hostMode ? '/usr/bin/nsenter' : this.config.shell;
     const shellArgs = this.config.hostMode
-      ? ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--no-fork', '--root', `--wd=/proc/1/root${this.config.cwd}`, '--', this.config.shell, ...this.config.shellArgs]
+      ? ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--no-fork', '--root', `--wd=/proc/1/root${requestedCwd}`, '--', this.config.shell, ...this.config.shellArgs]
       : this.config.shellArgs;
     const term = getPty().spawn(shell, shellArgs, {
       name: 'xterm-256color',

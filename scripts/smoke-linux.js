@@ -36,6 +36,7 @@ function request(pathname, options = {}, body = '') {
 
 function exerciseTerminal(cookie, options) {
   const wsUrl = new URL('/ws/terminal?cols=100&rows=30', baseUrl);
+  if (options.startCwd) wsUrl.searchParams.set('cwd', options.startCwd);
   wsUrl.protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
@@ -52,7 +53,7 @@ function exerciseTerminal(cookie, options) {
     let sawFile = false;
 
     const finishIfComplete = () => {
-      if (!sawRootUser || !sawCwdChange || !sawDirectory || !sawFile || !output.includes(options.marker) || (options.expectedContent && !output.includes(options.expectedContent))) {
+      if (!sawRootUser || !sawCwdChange || !sawDirectory || !sawFile || !output.includes(options.marker) || (options.expectedContent && !output.includes(options.expectedContent)) || (options.startCwd && !output.includes(`SMOKE_START=${options.startCwd}`))) {
         return;
       }
       clearTimeout(timeout);
@@ -64,7 +65,7 @@ function exerciseTerminal(cookie, options) {
     ws.on('open', () => {
       ws.send(JSON.stringify({
         type: 'input',
-        data: `cd ${options.cwd} && printf 'SMOKE_UID=%s\\n' "$(id -u)" && printf '${options.marker}\\n'${options.expectedContent ? ` && cat ${options.filePath}` : ''}\n`
+        data: `${options.startCwd ? `printf 'SMOKE_START=%s\\n' "$PWD"` : `cd ${options.cwd}`} && printf 'SMOKE_UID=%s\\n' "$(id -u)" && printf '${options.marker}\\n'${options.expectedContent ? ` && cat ${options.filePath}` : ''}\n`
       }));
       ws.send(JSON.stringify({ type: 'fs:read', requestId: `file-${options.marker}`, path: options.filePath }));
     });
@@ -79,7 +80,7 @@ function exerciseTerminal(cookie, options) {
         finishIfComplete();
         return;
       }
-      if (message.type === 'cwd' && message.path === options.cwd && !sawCwdChange) {
+      if (((message.type === 'cwd' && message.path === options.cwd) || (options.startCwd && message.type === 'ready' && message.cwd === options.cwd)) && !sawCwdChange) {
         sawCwdChange = true;
         ws.send(JSON.stringify({ type: 'fs:list', requestId: `dir-${options.marker}`, path: options.cwd }));
         finishIfComplete();
@@ -175,6 +176,32 @@ async function exerciseFilesystem(cookie) {
     }
     await mutate('delete', directoryPath).catch(() => {});
   }
+}
+
+async function exerciseFileOperations(cookie) {
+  const root = `/tmp/ws-terminal-batch-${process.pid}-${Date.now()}`;
+  const mutate = (operation, target, name) => requestJson('/api/filesystem/mutate', cookie, { method: 'POST', body: { operation, path: target, name } });
+  const batch = (operation, paths, destination) => requestJson('/api/filesystem/batch', cookie, { method: 'POST', body: { operation, paths, destination } });
+  async function cleanup(target) {
+    const listing = await requestJson(`/api/filesystem/list?hidden=1&path=${encodeURIComponent(target)}`, cookie);
+    for (const entry of listing.entries) { if (entry.type === 'directory') await cleanup(entry.path); else await mutate('delete', entry.path); }
+    await mutate('delete', target);
+  }
+  try {
+    await mutate('create-directory', '/tmp', root.slice(5));
+    await mutate('create-directory', root, 'source'); await mutate('create-directory', root, 'destination');
+    const content = '\uFEFFbatch smoke\r\n\r\n';
+    await requestJson('/api/filesystem/save-as', cookie, { method: 'POST', body: { path: `${root}/source/.hidden`, content } });
+    const copied = await batch('copy', [`${root}/source`], `${root}/destination`);
+    if (!copied.results[0].ok) throw new Error(`Directory copy failed: ${JSON.stringify(copied)}`);
+    const result = await requestJson('/api/filesystem/read', cookie, { method: 'POST', body: { path: `${root}/destination/source/.hidden` } });
+    if (result.content !== content) throw new Error('Save As / copy changed file bytes');
+    const conflict = await batch('copy', [`${root}/source`], `${root}/destination`);
+    if (conflict.results[0].code !== 'EEXIST') throw new Error('Copy silently overwrote its target');
+    const moved = await batch('move', [`${root}/source/.hidden`], `${root}/destination`);
+    if (!moved.results[0].ok) throw new Error(`Move failed: ${JSON.stringify(moved)}`);
+    await exerciseTerminal(cookie, { marker: 'START_DIRECTORY_OK', cwd: root, startCwd: root, filePath: `${root}/destination/.hidden` });
+  } finally { await cleanup(root).catch(() => {}); }
 }
 
 function exerciseTerminalExit(cookie) {
@@ -330,6 +357,7 @@ async function main() {
     exerciseTerminalClose(cookie),
     exerciseTerminalExit(cookie)
   ]);
+  await exerciseFileOperations(cookie);
 
   if (process.env.WS_TERMINAL_TEST_HOST_MODE === '1') {
     const hostFile = `/tmp/ws-terminal-host-proof-${process.pid}-${Date.now()}`;

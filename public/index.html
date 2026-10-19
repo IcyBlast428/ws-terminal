@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WS Terminal</title>
     <link rel="stylesheet" href="/vendor/xterm.css" />
-    <link rel="stylesheet" href="/assets/app.css?v=1.1.0" />
+    <link rel="stylesheet" href="/assets/app.css?v=1.2.0" />
   </head>
   <body>
     <main class="shell-page">
@@ -29,6 +29,9 @@
           <button class="icon-button" id="sessionsButton" type="button" title="终端会话" aria-label="终端会话" data-icon="sessions"></button>
           <button class="icon-button" id="auditButton" type="button" title="操作记录" aria-label="操作记录" data-icon="audit"></button>
           <button class="icon-button" id="draftsButton" type="button" title="短期草稿" aria-label="短期草稿" data-icon="draft"></button>
+          <button class="icon-button" id="saveAllButton" type="button" title="保存全部" aria-label="保存全部" data-icon="save-all"></button>
+          <button class="icon-button" id="tabOverviewButton" type="button" title="标签总览" aria-label="标签总览" data-icon="tabs"></button>
+          <button class="icon-button" id="commandButton" type="button" title="命令面板" aria-label="命令面板" data-icon="command"></button>
           <div class="font-size-control" aria-label="终端字号">
             <button id="decreaseFontButton" type="button" title="减小终端字号" aria-label="减小终端字号">−</button>
             <output id="fontSizeValue" aria-live="polite">14</output>
@@ -50,9 +53,11 @@
             </div>
           </div>
           <form class="explorer-navigation" id="pathForm">
-            <input id="pathInput" aria-label="目录路径" value="/" autocomplete="off" />
+            <input id="pathInput" aria-label="目录路径" value="/" autocomplete="off" list="pathSuggestions" />
+            <datalist id="pathSuggestions"></datalist>
             <button type="submit" class="icon-button" aria-label="跳转目录" title="跳转目录" data-icon="right"></button>
           </form>
+          <nav class="breadcrumbs" id="breadcrumbs" aria-label="目录面包屑"></nav>
           <div class="explorer-filters">
             <input id="treeFilter" type="search" aria-label="筛选目录条目" placeholder="筛选名称" />
             <button class="icon-button" id="hiddenButton" type="button" title="显示隐藏文件" aria-label="显示隐藏文件" aria-pressed="false" data-icon="hidden"></button>
@@ -60,6 +65,16 @@
           </div>
           <div class="explorer-search-scope"><select id="treeSearchMode" aria-label="目录搜索范围"><option value="local">筛选已加载条目</option><option value="remote">搜索当前目录全部条目</option></select></div>
           <div id="treeSummary" class="tree-summary" role="status"></div>
+          <div class="selection-toolbar" id="selectionToolbar">
+            <input type="checkbox" id="selectAllEntries" aria-label="全选可见条目" />
+            <span id="selectionCount">0</span>
+            <button class="icon-button" id="copyEntriesButton" type="button" aria-label="复制所选" title="复制所选" data-icon="copy"></button>
+            <button class="icon-button" id="cutEntriesButton" type="button" aria-label="剪切所选" title="剪切所选" data-icon="cut"></button>
+            <button class="icon-button" id="pasteEntriesButton" type="button" aria-label="粘贴到当前目录" title="粘贴到当前目录" data-icon="paste"></button>
+            <button class="icon-button" id="duplicateEntriesButton" type="button" aria-label="创建所选副本" title="创建所选副本" data-icon="duplicate"></button>
+            <button class="icon-button" id="deleteEntriesButton" type="button" aria-label="删除所选" title="删除所选" data-icon="delete"></button>
+          </div>
+          <div id="clipboardStatus" class="tree-summary" role="status"></div>
           <div class="bookmarks" id="bookmarks"></div>
           <div class="transfer-status" id="transferStatus" hidden></div>
           <nav class="directory-tree" id="directoryTree" aria-label="服务器目录树">
@@ -76,6 +91,12 @@
       <button type="button" data-action="create-file" role="menuitem">新建文件</button>
       <button type="button" data-action="create-directory" role="menuitem">新建目录</button>
       <button type="button" data-action="rename" role="menuitem">重命名</button>
+      <button type="button" data-action="copy" role="menuitem">复制</button>
+      <button type="button" data-action="cut" role="menuitem">剪切</button>
+      <button type="button" data-action="paste" role="menuitem">粘贴到此目录</button>
+      <button type="button" data-action="duplicate" role="menuitem">创建副本</button>
+      <button type="button" data-action="copy-path" role="menuitem">复制路径</button>
+      <button type="button" data-action="terminal" role="menuitem">在此目录新建终端</button>
       <button type="button" data-action="download" role="menuitem">下载</button>
       <button type="button" data-action="bookmark" role="menuitem">收藏目录</button>
       <button type="button" data-action="properties" role="menuitem">属性</button>
@@ -115,8 +136,8 @@
     </dialog>
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>
-    <script src="/assets/editor.bundle.js?v=1.1.0"></script>
-    <script src="/assets/workbench-model.js?v=1.1.0"></script>
-    <script src="/assets/app.js?v=1.1.0"></script>
+    <script src="/assets/editor.bundle.js?v=1.2.0"></script>
+    <script src="/assets/workbench-model.js?v=1.2.0"></script>
+    <script src="/assets/app.js?v=1.2.0"></script>
   </body>
 </html>

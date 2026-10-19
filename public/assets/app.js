@@ -50,6 +50,14 @@
   const pendingDirectoryRequests = new Map();
   const pendingDirectoryPaths = new Set();
   const pendingFsRequests = new Map();
+  const selectedEntries = new Set();
+  const recentFiles = [];
+  let selectionAnchor = null;
+  let fileClipboard = null;
+  let batchBusy = false;
+  let focusMode = null;
+  let completionTimer = null;
+  let completionRequest = 0;
 
   let authenticated = false;
   let loggingOut = false;
@@ -281,6 +289,8 @@
     createDirectoryButton.disabled = !canManageFiles;
     refreshTreeButton.disabled = !canManageFiles;
     for (const id of ['uploadButton', 'sessionsButton', 'auditButton', 'draftsButton']) document.getElementById(id).disabled = !authenticated;
+    document.getElementById('saveAllButton').disabled = !authenticated || ![...tabs.values()].some(tab => tab.type === 'file' && tab.dirty && !tab.saving);
+    updateSelectionControls();
     const terminalLimitReached = terminalTabs().length >= config.maxSessions;
     for (const group of groups.values()) {
       group.newTerminalButton.disabled = !authenticated || terminalLimitReached;
@@ -310,6 +320,9 @@
       newTerminalButton.id = 'newTerminalButton';
     }
     strip.append(tabsElement, newTerminalButton);
+    const maximize = iconButton('maximize', '专注当前分屏', () => toggleFocus(group));
+    maximize.classList.add('group-maximize');
+    strip.append(maximize);
     const content = document.createElement('div');
     content.className = 'group-content';
     const panes = document.createElement('div');
@@ -336,11 +349,13 @@
       dropLayer,
       dropPreview,
       newTerminalButton,
+      maximize,
       activeTabId: null
     };
     groups.set(id, group);
     newTerminalButton.addEventListener('click', () => createTerminal(group));
     element.addEventListener('pointerdown', () => focusGroup(group));
+    element.addEventListener('focusin', () => focusGroup(group));
     if (attach) {
       layoutRoot.append(element);
     }
@@ -379,6 +394,7 @@
     if (!tab || !group) {
       return;
     }
+    if (focusMode && focusMode.groupId !== group.id) restoreFocus();
     group.activeTabId = tabId;
     for (const candidate of groupTabs(group)) {
       const active = candidate.id === tabId;
@@ -448,6 +464,7 @@
       return;
     }
     if (!tabDrag.active) {
+      if (focusMode) restoreFocus();
       tabDrag.active = true;
       tabDrag.item.classList.add('dragging');
       document.body.classList.add('tab-dragging');
@@ -560,6 +577,7 @@
     close.title = `关闭 ${tab.title}`;
     close.setAttribute('aria-label', `关闭 ${tab.title}`);
     select.addEventListener('click', () => activateTab(tab.id));
+    if (tab.type === 'terminal') select.addEventListener('dblclick', () => renameTerminal(tab));
     select.addEventListener('pointerdown', (event) => beginTabDrag(event, tab, item));
     close.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -741,6 +759,11 @@
       return false;
     }
     const group = groups.get(tab.groupId);
+    if (focusMode) restoreFocus();
+    if (tab.type === 'file' && !loggingOut && !tab.deleted) {
+      const previous = recentFiles.indexOf(tab.path); if (previous >= 0) recentFiles.splice(previous, 1);
+      recentFiles.unshift(tab.path); recentFiles.splice(20);
+    }
     tabs.delete(tab.id);
     tab.tabEl.remove();
     tab.pane.remove();
@@ -926,10 +949,11 @@
     url.searchParams.set('cols', String(term.cols || 100));
     url.searchParams.set('rows', String(term.rows || 30));
     if (terminal.sessionId) { url.searchParams.set('session', terminal.sessionId); url.searchParams.set('after', String(terminal.lastSequence || 0)); }
+    else if (terminal.startCwd) url.searchParams.set('cwd', terminal.startCwd);
     return url.toString();
   }
 
-  function createTerminal(group = focusedGroup(), resume = null) {
+  function createTerminal(group = focusedGroup(), resume = null, startCwd = null) {
     if (!authenticated || terminalTabs().length >= config.maxSessions) {
       if (!authenticated) {
         tokenInput.focus();
@@ -950,7 +974,7 @@
     const terminal = {
       id, groupId: group.id, type: 'terminal', title: `Terminal ${number}`, pane, host, term, fitAddon,
       socket: null, connected: false, closed: false, processExited: false, cwd: '', shell: '', tabEl: null, selectEl: null,
-      resizeObserver: null, sessionId: resume?.id || null, lastSequence: 0, reconnectTimer: null, reconnectStartedAt: null, reconnectAttempts: 0
+      resizeObserver: null, sessionId: resume?.id || null, startCwd, lastSequence: 0, reconnectTimer: null, reconnectStartedAt: null, reconnectAttempts: 0
     };
     tabs.set(id, terminal);
     makeTabChrome(terminal);
@@ -1301,6 +1325,12 @@
     row.className = `tree-row ${entry.type}${isExpanded ? ' expanded' : ''}${entry.path === currentCwd ? ' current' : ''}`;
     row.style.setProperty('--tree-depth', String(depth));
     row.dataset.path = entry.path;
+    row.classList.toggle('selected', selectedEntries.has(entry.path));
+    row.classList.toggle('cut-entry', fileClipboard?.operation === 'move' && fileClipboard.paths.includes(entry.path));
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'tree-select';
+    checkbox.checked = selectedEntries.has(entry.path); checkbox.disabled = entry.path === '/' || batchBusy;
+    checkbox.setAttribute('aria-label', `选择 ${entry.name}`);
+    checkbox.addEventListener('click', event => { event.stopPropagation(); selectEntry(entry.path, event, true); });
     const main = document.createElement('button');
     main.type = 'button';
     main.className = 'tree-main';
@@ -1337,15 +1367,18 @@
     action.append(window.WorkbenchIcons('more'));
     action.title = `${entry.name} 操作`;
     action.setAttribute('aria-label', `${entry.name} 操作`);
-    row.append(main, size, action);
+    row.append(checkbox, main, size, action);
     item.append(row);
-    main.addEventListener('click', () => {
+    main.addEventListener('click', event => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey) { selectEntry(entry.path, event, true); return; }
+      selectedEntries.clear(); selectionAnchor = entry.path; updateSelectionControls();
       if (!isDirectory) {
         openFile(entry.path);
         return;
       }
       currentCwd = entry.path;
       pathInput.value = entry.path;
+      renderBreadcrumbs();
       cwdPathEl.textContent = entry.path;
       cwdPathEl.title = entry.path;
       if (expandedDirectories.has(entry.path)) {
@@ -1406,6 +1439,7 @@
     directoryTreeEl.append(tree);
     const listing = directoryCache.get(currentCwd);
     document.getElementById('treeSummary').textContent = listing && !listing.error ? `已加载 ${listing.entries.length} / ${listing.total ?? listing.entries.length}${listing.query ? ' · 名称搜索结果' : ''}` : '';
+    renderBreadcrumbs(); updateSelectionControls();
   }
 
   function showTreeContextMenu(entry, x, y) {
@@ -1415,6 +1449,8 @@
       button.hidden = (action.startsWith('create-') && entry.type !== 'directory') ||
         ((action === 'rename' || action === 'delete') && entry.path === '/') ||
         (action === 'download' && entry.type === 'directory') || ((action === 'bookmark' || action === 'size') && entry.type !== 'directory');
+      if (['copy', 'cut', 'duplicate'].includes(action) && entry.path === '/') button.hidden = true;
+      if (action === 'paste') { button.hidden = entry.type !== 'directory'; button.disabled = !fileClipboard || batchBusy; }
     }
     treeContextMenu.hidden = false;
     const width = treeContextMenu.offsetWidth;
@@ -1436,7 +1472,7 @@
   }
 
   function choose(title, message, choices) {
-    openUtility(title); utilityBody.textContent = message;
+    openUtility(title); const text = document.createElement('p'); text.className = 'confirmation-detail'; text.textContent = message; utilityBody.append(text);
     return utilityChoice(choices);
   }
 
@@ -1691,6 +1727,7 @@
   function navigateDirectory(value) {
     const target = normalizePath(value);
     if (!target || !authenticated) return;
+    selectedEntries.clear(); selectionAnchor = null;
     treeRoot = target; currentCwd = target; pathInput.value = target; cwdPathEl.textContent = target; cwdPathEl.title = target;
     treeFilter.value = ''; expandedDirectories.add(target); loadDirectory(target, true); renderDirectoryTree();
   }
@@ -1963,18 +2000,25 @@
       if (tab.type !== 'file' || (tab.path !== oldPath && !tab.path.startsWith(`${oldPath}/`))) {
         continue;
       }
+      const previous = tab.path;
+      clearTimeout(tab.draftTimer);
       tab.path = `${newPath}${tab.path.slice(oldPath.length)}`;
       tab.title = basename(tab.path);
       tab.pathEl.textContent = tab.path;
       tab.pathEl.title = tab.path;
       tab.selectEl.textContent = tab.title;
       tab.selectEl.title = tab.path;
+      tab.editor.setPath?.(tab.path);
+      const close = tab.tabEl.querySelector('.tab-close'); close.title = `关闭 ${tab.title}`; close.setAttribute('aria-label', close.title);
+      if (draftsEnabled) removeDraft(previous).then(() => { if (tab.dirty) scheduleDraft(tab); }).catch(notifyError);
     }
   }
 
   function closeTabsUnderPath(path) {
+    for (let index = recentFiles.length - 1; index >= 0; index--) if (recentFiles[index] === path || recentFiles[index].startsWith(`${path}/`)) recentFiles.splice(index, 1);
     for (const tab of [...tabs.values()]) {
       if (tab.type === 'file' && (tab.path === path || tab.path.startsWith(`${path}/`))) {
+        tab.deleted = true;
         closeTab(tab.id, true);
       }
     }
@@ -2068,6 +2112,7 @@
     fileTab.messageEl.hidden = !fileTab.message;
     fileTab.messageEl.textContent = fileTab.message;
     fileTab.messageEl.classList.toggle('error', Boolean(fileTab.error));
+    document.getElementById('saveAllButton').disabled = !authenticated || ![...tabs.values()].some(tab => tab.type === 'file' && tab.dirty && !tab.saving);
     if (focusedTab()?.id === fileTab.id) {
       setStatus(authenticated ? 'ready' : 'pending', authenticated ? `文本文件 · ${fileTab.path}` : '登录已过期，编辑内容已保留');
     }
@@ -2295,7 +2340,7 @@
       scheduleDraft(fileTab);
     });
     editor.addEventListener('keydown', (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 's') {
         event.preventDefault();
         saveFile(fileTab);
       }
@@ -2318,6 +2363,7 @@
     const search = iconButton('search', '查找与替换', () => editor.search());
     const jump = iconButton('right', '跳转行', () => editor.gotoLine());
     const download = iconButton('download', '下载文件', () => downloadFile(fileTab.path));
+    toolbar.insertBefore(iconButton('save-as', '另存为', () => saveFileAs(fileTab)), reload);
     toolbar.insertBefore(compare, reload); toolbar.insertBefore(merge, reload); toolbar.insertBefore(history, reload); toolbar.insertBefore(search, reload); toolbar.insertBefore(jump, reload); toolbar.insertBefore(download, reload);
     fileTab.offerDraft = () => offerDraft(fileTab);
     activateTab(id);
@@ -2325,6 +2371,257 @@
     scheduleWorkspaceSave();
     return fileTab;
   }
+
+  function visibleEntryPaths() {
+    return [...directoryTreeEl.querySelectorAll('.tree-row')].map(row => row.dataset.path).filter(value => value !== '/' && value !== treeRoot);
+  }
+
+  function updateSelectionControls() {
+    const available = visibleEntryPaths();
+    const checkbox = document.getElementById('selectAllEntries');
+    checkbox.checked = Boolean(available.length && available.every(value => selectedEntries.has(value)));
+    checkbox.indeterminate = !checkbox.checked && available.some(value => selectedEntries.has(value));
+    checkbox.disabled = !authenticated || batchBusy || !available.length;
+    document.getElementById('selectionCount').textContent = String(selectedEntries.size);
+    for (const id of ['copyEntriesButton', 'cutEntriesButton', 'duplicateEntriesButton', 'deleteEntriesButton']) document.getElementById(id).disabled = !authenticated || batchBusy || !selectedEntries.size;
+    document.getElementById('pasteEntriesButton').disabled = !authenticated || batchBusy || !fileClipboard?.paths.length;
+    document.getElementById('clipboardStatus').textContent = fileClipboard ? `${fileClipboard.operation === 'move' ? '待移动' : '待复制'} ${fileClipboard.paths.length} 项` : '';
+    for (const row of directoryTreeEl.querySelectorAll('.tree-row')) {
+      const selected = selectedEntries.has(row.dataset.path);
+      row.classList.toggle('selected', selected);
+      row.querySelector('.tree-select').checked = selected;
+      row.querySelector('.tree-main').setAttribute('aria-selected', String(selected));
+    }
+  }
+
+  function selectEntry(value, event, toggle) {
+    if (batchBusy || value === '/') return;
+    const visible = visibleEntryPaths();
+    if (event.shiftKey && visible.includes(selectionAnchor) && visible.includes(value)) {
+      const bounds = [visible.indexOf(selectionAnchor), visible.indexOf(value)].sort((a, b) => a - b);
+      for (const path of visible.slice(bounds[0], bounds[1] + 1)) selectedEntries.add(path);
+    } else {
+      if (toggle && selectedEntries.has(value)) selectedEntries.delete(value); else selectedEntries.add(value);
+      selectionAnchor = value;
+    }
+    updateSelectionControls();
+  }
+
+  function setFileClipboard(operation, paths = [...selectedEntries]) {
+    paths = window.WorkbenchModel.topLevelPaths(paths.filter(value => value !== '/'));
+    if (!paths.length) return;
+    fileClipboard = { operation, paths }; renderDirectoryTree();
+  }
+
+  async function batchFiles(operation, paths = [...selectedEntries], destination = currentCwd) {
+    if (!authenticated || batchBusy) return;
+    paths = window.WorkbenchModel.topLevelPaths(paths);
+    if (!paths.length) return;
+    if (paths.length > 100) { notifyError(new Error('每次最多操作 100 个条目')); return; }
+    const affected = [...tabs.values()].filter(tab => tab.type === 'file' && paths.some(value => tab.path === value || tab.path.startsWith(`${value}/`)));
+    if (affected.some(tab => tab.saving || tab.loading)) { notifyError(new Error('相关文件仍在读取或保存，请稍后重试')); return; }
+    const label = { copy: '复制', move: '移动', duplicate: '创建副本', delete: '删除' }[operation];
+    const detail = `${paths.join('\n')}${operation === 'copy' || operation === 'move' ? `\n→ ${destination}` : ''}${operation === 'delete' ? '\n目录必须为空。' : '\n同名目标不会被覆盖。'}${affected.some(tab => tab.dirty) ? '\n包含未保存的文件；复制读取磁盘内容，删除将放弃编辑。' : ''}`;
+    if (!await choose(`确认${label} ${paths.length} 项`, detail, [{ label: '取消', value: false }, { label: `确认${label}`, value: true, danger: operation === 'delete' }])) return;
+    batchBusy = true; updateSelectionControls();
+    openUtility(`${label}结果`); utilityBody.textContent = '正在处理…';
+    const resultHost = document.createElement('div'); utilityBody.replaceChildren(resultHost);
+    try {
+      const result = await api('/api/filesystem/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, paths, destination }) });
+      for (const item of result.results) {
+        if (item.ok) {
+          selectedEntries.delete(item.path);
+          if (operation === 'move') updateOpenPaths(item.path, item.newPath);
+          if (operation === 'delete') closeTabsUnderPath(item.path);
+          if (operation === 'move' && (currentCwd === item.path || currentCwd.startsWith(`${item.path}/`))) navigateDirectory(item.newPath + currentCwd.slice(item.path.length));
+          if (operation === 'delete' && (currentCwd === item.path || currentCwd.startsWith(`${item.path}/`))) navigateDirectory(dirname(item.path));
+          invalidateDirectory(dirname(item.path)); if (item.newPath) invalidateDirectory(dirname(item.newPath));
+        }
+        const row = document.createElement('div'); row.className = `operation-result ${item.ok ? 'success' : 'error'}`;
+        row.textContent = `${item.ok ? '完成' : '失败'} · ${item.path}${item.ok && item.newPath ? ` → ${item.newPath}` : ''}${item.error ? ` · ${item.error}` : ''}`; resultHost.append(row);
+      }
+      if (operation === 'move' && fileClipboard?.operation === 'move') {
+        fileClipboard.paths = fileClipboard.paths.filter(value => !result.results.some(item => item.ok && item.path === value));
+        if (!fileClipboard.paths.length) fileClipboard = null;
+      }
+      scheduleWorkspaceSave();
+    } catch (error) { const row = document.createElement('p'); row.className = 'error'; row.textContent = window.WorkbenchModel.errorText(error); resultHost.append(row); }
+    finally { batchBusy = false; renderDirectoryTree(); }
+  }
+
+  function renderBreadcrumbs() {
+    const container = document.getElementById('breadcrumbs'); container.replaceChildren();
+    const up = iconButton('up', '上一级目录', () => navigateDirectory(dirname(currentCwd))); up.disabled = !authenticated || currentCwd === '/'; container.append(up);
+    const parts = document.createElement('div'); parts.className = 'breadcrumb-parts'; container.append(parts);
+    for (const item of window.WorkbenchModel.breadcrumbs(currentCwd)) {
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = item.name; button.title = item.path;
+      button.setAttribute('aria-label', `打开目录 ${item.path}`); button.disabled = !authenticated;
+      if (item.path === currentCwd) button.setAttribute('aria-current', 'location');
+      button.addEventListener('click', () => navigateDirectory(item.path)); parts.append(button);
+    }
+    container.append(iconButton('copy', '复制当前目录路径', () => copyText(currentCwd)), iconButton('terminal', '在当前目录新建终端', () => createTerminal(focusedGroup(), null, currentCwd)));
+  }
+
+  async function completePath() {
+    const request = ++completionRequest;
+    const value = pathInput.value;
+    if (!authenticated || !value.startsWith('/')) return;
+    const parent = value.endsWith('/') ? normalizePath(value) : dirname(value);
+    const prefix = value.endsWith('/') ? '' : basename(value).toLowerCase();
+    try {
+      const result = await api(`/api/filesystem/list?path=${encodeURIComponent(parent)}&hidden=${showHidden ? '1' : '0'}&query=${encodeURIComponent(prefix)}`);
+      if (request !== completionRequest || pathInput.value !== value) return;
+      const candidates = result.entries.filter(entry => entry.type === 'directory' && entry.name.toLowerCase().startsWith(prefix));
+      document.getElementById('pathSuggestions').replaceChildren(...candidates.slice(0, 50).map(entry => { const option = document.createElement('option'); option.value = entry.path + '/'; return option; }));
+    } catch { if (request === completionRequest) document.getElementById('pathSuggestions').replaceChildren(); }
+  }
+
+  function inputAction(title, label, initial, action) {
+    openUtility(title);
+    const form = document.createElement('form'); form.className = 'input-action-form';
+    const text = document.createElement('label'); text.textContent = label;
+    const input = document.createElement('input'); input.value = initial; input.required = true; input.setAttribute('aria-label', label); text.append(input);
+    const errorEl = document.createElement('p'); errorEl.className = 'dialog-error'; errorEl.setAttribute('role', 'alert');
+    const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'primary-button'; submit.textContent = '确认';
+    form.append(text, errorEl, submit); utilityBody.append(form);
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); if (submit.disabled) return;
+      submit.disabled = true; input.disabled = true; errorEl.textContent = '';
+      try { await action(input.value); if (form.isConnected) utilityDialog.close(); }
+      catch (error) { errorEl.textContent = window.WorkbenchModel.errorText(error); }
+      finally { submit.disabled = false; input.disabled = false; }
+    });
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+  }
+
+  function saveFileAs(tab = focusedTab()) {
+    if (!authenticated || tab?.type !== 'file' || tab.loading || tab.saving || !tab.version) return;
+    inputAction('另存为', '新文件的完整路径', tab.path, async value => {
+      const target = normalizePath(value);
+      if (!target || target === '/' || target === tab.path) throw new Error('请输入不同的绝对文件路径');
+      if ([...tabs.values()].some(other => other.id !== tab.id && other.path === target)) throw new Error('目标文件已在其他标签中打开');
+      if (!tabs.has(tab.id)) throw new Error('原文件标签已关闭');
+      const original = tab.path; const content = serializedContent(tab);
+      tab.saving = true; renderFile(tab);
+      try {
+        const result = await api('/api/filesystem/save-as', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: target, content }) });
+        updateOpenPaths(original, target);
+        applyDiskContent(tab, result.content); tab.version = result.version; tab.size = result.size; tab.modifiedAt = result.modifiedAt;
+        tab.dirty = false; tab.externalContent = null; tab.error = ''; tab.message = '已另存为';
+        tab.draftNotice?.remove(); clearTimeout(tab.draftTimer); await removeDraft(original).catch(notifyError);
+        invalidateDirectory(dirname(target)); scheduleWorkspaceSave();
+      } finally { tab.saving = false; renderFile(tab); }
+    });
+  }
+
+  async function saveAllFiles() {
+    if (!authenticated) return;
+    const files = [...tabs.values()].filter(tab => tab.type === 'file' && tab.dirty);
+    if (!files.length) return;
+    openUtility('保存全部'); const host = document.createElement('div'); utilityBody.append(host);
+    for (const tab of files) {
+      const row = document.createElement('div'); row.className = 'operation-result'; row.textContent = `${tab.path} · 保存中`; host.append(row);
+      const ok = tabs.has(tab.id) && !tab.loading && !tab.saving && await saveFile(tab);
+      row.classList.add(ok ? 'success' : 'error'); row.textContent = `${tab.path} · ${ok ? '已保存' : tab.error || '未保存，内容已保留'}`;
+    }
+  }
+
+  function restoreFocus() {
+    if (!focusMode) return;
+    const group = groups.get(focusMode.groupId);
+    group?.element.classList.remove('focus-target');
+    if (group) { group.maximize.title = '专注当前分屏'; group.maximize.setAttribute('aria-label', group.maximize.title); group.maximize.replaceChildren(window.WorkbenchIcons('maximize')); }
+    focusMode = null; layoutRoot.classList.remove('focus-mode'); scheduleFitAllVisibleTerminals();
+  }
+
+  function positionFocusedGroup() {
+    if (!focusMode) return;
+    const rect = layoutRoot.getBoundingClientRect(); const element = groups.get(focusMode.groupId)?.element;
+    if (!element) return;
+    for (const [name, value] of Object.entries({ left: rect.left, top: rect.top, width: rect.width, height: rect.height })) element.style.setProperty(`--focus-${name}`, `${value}px`);
+  }
+
+  function toggleFocus(group = focusedGroup()) {
+    if (!group) return;
+    if (focusMode?.groupId === group.id) { restoreFocus(); return; }
+    restoreFocus(); focusMode = { groupId: group.id }; layoutRoot.classList.add('focus-mode'); group.element.classList.add('focus-target');
+    group.maximize.title = '恢复分屏布局'; group.maximize.setAttribute('aria-label', group.maximize.title); group.maximize.replaceChildren(window.WorkbenchIcons('minimize'));
+    positionFocusedGroup(); scheduleFitAllVisibleTerminals();
+  }
+
+  function renameTerminal(tab = focusedTerminal()) {
+    if (!tab || tab.type !== 'terminal') return;
+    inputAction('重命名终端', '终端名称', tab.title, async value => {
+      value = value.trim(); if (!value || value.length > 80 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('名称需为 1 至 80 个可见字符');
+      if (!tabs.has(tab.id)) throw new Error('终端已关闭');
+      tab.title = value; tab.selectEl.textContent = value; tab.selectEl.title = value;
+      const close = tab.tabEl.querySelector('.tab-close'); close.title = `关闭 ${value}`; close.setAttribute('aria-label', close.title);
+    });
+  }
+
+  function showPicker(title, items) {
+    openUtility(title);
+    const search = document.createElement('input'); search.type = 'search'; search.className = 'picker-search'; search.setAttribute('aria-label', `搜索${title}`); search.setAttribute('role', 'combobox'); search.setAttribute('aria-expanded', 'true'); search.setAttribute('aria-controls', 'pickerList');
+    const list = document.createElement('div'); list.id = 'pickerList'; list.className = 'picker-list'; list.setAttribute('role', 'listbox');
+    utilityBody.append(search, list); let index = 0; let filtered = [];
+    const activate = item => { if (!item || item.disabled) return; utilityDialog.close(); Promise.resolve().then(item.action).catch(notifyError); };
+    const render = () => {
+      const query = search.value.toLowerCase().trim(); filtered = items.filter(item => `${item.label} ${item.detail || ''} ${item.shortcut || ''}`.toLowerCase().includes(query));
+      index = Math.max(0, Math.min(index, filtered.length - 1)); list.replaceChildren();
+      filtered.forEach((item, offset) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'picker-item'; button.id = `picker-option-${offset}`; button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(offset === index)); button.disabled = Boolean(item.disabled);
+        const text = document.createElement('span'); text.textContent = item.label;
+        const detail = document.createElement('small'); detail.textContent = item.detail || ''; text.append(detail); button.append(text);
+        if (item.shortcut) { const key = document.createElement('kbd'); key.textContent = item.shortcut; button.append(key); }
+        button.addEventListener('click', () => activate(item)); list.append(button);
+      });
+      if (!filtered.length) list.textContent = '无匹配项';
+      search.setAttribute('aria-activedescendant', filtered.length ? `picker-option-${index}` : '');
+      list.children[index]?.scrollIntoView({ block: 'nearest' });
+    };
+    search.addEventListener('input', () => { index = 0; render(); });
+    search.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); index += event.key === 'ArrowDown' ? 1 : -1; render(); }
+      if (event.key === 'Enter') { event.preventDefault(); activate(filtered[index]); }
+    }); render(); requestAnimationFrame(() => search.focus());
+  }
+
+  function showTabOverview() {
+    const entries = [...tabs.values()].map(tab => ({ label: tab.title + (tab.dirty ? ' · 未保存' : ''), detail: `${tab.type === 'file' ? tab.path : '终端'} · 分屏 ${[...groups.keys()].indexOf(tab.groupId) + 1}`, action: () => activateTab(tab.id) }));
+    for (const path of recentFiles.filter(path => ![...tabs.values()].some(tab => tab.path === path))) entries.push({ label: basename(path), detail: `最近关闭 · ${path}`, disabled: !authenticated, action: () => openFile(path) });
+    showPicker('标签总览', entries);
+  }
+
+  function commands() {
+    const file = focusedTab()?.type === 'file' ? focusedTab() : null;
+    return [
+      { id: 'terminal.new', label: '新建终端', shortcut: 'Ctrl+Alt+T', enabled: () => authenticated && terminalTabs().length < config.maxSessions, action: () => createTerminal() },
+      { id: 'terminal.here', label: '在当前目录新建终端', enabled: () => authenticated, action: () => createTerminal(focusedGroup(), null, currentCwd) },
+      { id: 'terminal.rename', label: '重命名终端', enabled: () => Boolean(focusedTerminal()), action: () => renameTerminal() },
+      { id: 'file.save', label: '保存当前文件', shortcut: 'Ctrl+S', enabled: () => authenticated && file?.dirty && !file.saving, action: () => saveFile(file) },
+      { id: 'file.save-as', label: '另存为', shortcut: 'Ctrl+Shift+S', enabled: () => authenticated && file?.version && !file.saving, action: () => saveFileAs(file) },
+      { id: 'file.save-all', label: '保存全部', shortcut: 'Ctrl+Alt+S', enabled: () => authenticated && [...tabs.values()].some(tab => tab.type === 'file' && tab.dirty), action: saveAllFiles },
+      { id: 'file.new', label: '新建文件', enabled: () => authenticated, action: () => openEntryDialog('create-file', currentCwd) },
+      { id: 'folder.new', label: '新建目录', enabled: () => authenticated, action: () => openEntryDialog('create-directory', currentCwd) },
+      { id: 'folder.path', label: '跳转目录', shortcut: 'Ctrl+Alt+L', enabled: () => authenticated, action: () => { setExplorerHidden(false); pathInput.focus(); pathInput.select(); } },
+      { id: 'folder.copy-path', label: '复制当前目录路径', enabled: () => authenticated, action: () => copyText(currentCwd) },
+      { id: 'folder.refresh', label: '刷新当前目录', enabled: () => authenticated, action: () => loadDirectory(currentCwd, true) },
+      { id: 'view.tabs', label: '标签总览', shortcut: 'Ctrl+Alt+P', action: showTabOverview },
+      { id: 'view.focus', label: focusMode ? '恢复分屏布局' : '专注当前分屏', shortcut: 'Ctrl+Alt+M', action: () => toggleFocus() },
+      { id: 'view.sidebar', label: '显示或隐藏目录树', shortcut: 'Ctrl+Alt+B', action: () => setExplorerHidden(!workspaceEl.classList.contains('explorer-hidden')) },
+      { id: 'view.sessions', label: '终端会话', enabled: () => authenticated, action: showSessions },
+      { id: 'view.drafts', label: '短期草稿', enabled: () => authenticated, action: showDrafts },
+      { id: 'tab.close', label: '关闭当前标签', shortcut: 'Ctrl+Alt+W', enabled: () => Boolean(focusedTab()), action: () => closeTab(focusedTab().id) },
+      { id: 'tab.reopen', label: '重新打开最近关闭的文件', enabled: () => authenticated && recentFiles.length > 0, action: () => openFile(recentFiles[0]) }
+    ];
+  }
+
+  function runCommand(id) {
+    const command = commands().find(command => command.id === id);
+    if (command && (!command.enabled || command.enabled())) Promise.resolve().then(command.action).catch(notifyError);
+  }
+
+  function showCommands() { showPicker('命令面板', commands().map(command => ({ ...command, disabled: Boolean(command.enabled && !command.enabled()) }))); }
 
   async function login() {
     const token = tokenInput.value.trim();
@@ -2374,6 +2671,7 @@
       return;
     }
     loggingOut = true;
+    fileClipboard = null; selectedEntries.clear(); recentFiles.splice(0);
     authenticated = false;
     for (const tabId of [...tabs.keys()]) {
       closeTab(tabId, true);
@@ -2419,12 +2717,24 @@
     }
     const entry = contextEntry;
     const action = button.dataset.action;
+    const paths = selectedEntries.has(entry.path) ? [...selectedEntries] : [entry.path];
     if (action === 'create-file' || action === 'create-directory') {
       openEntryDialog(action, entry.path);
     } else if (action === 'rename') {
       openEntryDialog('rename', entry.path);
     } else if (action === 'delete') {
-      openDeleteDialog(entry);
+      if (paths.length > 1 || [...tabs.values()].some(tab => tab.type === 'file' && tab.dirty && (tab.path === entry.path || tab.path.startsWith(`${entry.path}/`)))) { hideTreeContextMenu(); batchFiles('delete', paths).catch(notifyError); }
+      else openDeleteDialog(entry);
+    } else if (action === 'copy' || action === 'cut') {
+      hideTreeContextMenu(); setFileClipboard(action === 'cut' ? 'move' : 'copy', paths);
+    } else if (action === 'paste') {
+      hideTreeContextMenu(); if (fileClipboard) batchFiles(fileClipboard.operation, [...fileClipboard.paths], entry.path).catch(notifyError);
+    } else if (action === 'duplicate') {
+      hideTreeContextMenu(); batchFiles('duplicate', paths).catch(notifyError);
+    } else if (action === 'copy-path') {
+      hideTreeContextMenu(); copyText(entry.path);
+    } else if (action === 'terminal') {
+      hideTreeContextMenu(); createTerminal(focusedGroup(), null, entry.type === 'directory' ? entry.path : dirname(entry.path));
     } else if (action === 'download') {
       hideTreeContextMenu(); downloadFile(entry.path);
     } else if (action === 'bookmark') {
@@ -2444,6 +2754,32 @@
     if (event.key === 'Escape' && tabDrag) {
       cancelTabDrag();
     }
+  });
+  document.addEventListener('keydown', event => {
+    if (event.isComposing || event.getModifierState?.('AltGraph')) return;
+    const dialogOpen = Boolean(document.querySelector('dialog[open]'));
+    const modifier = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+    let command;
+    if (!dialogOpen && modifier && event.shiftKey && !event.altKey && key === 'p') { event.preventDefault(); event.stopImmediatePropagation(); showCommands(); return; }
+    if (!dialogOpen && modifier && event.altKey && !event.shiftKey) command = { t: 'terminal.new', s: 'file.save-all', l: 'folder.path', p: 'view.tabs', m: 'view.focus', b: 'view.sidebar', w: 'tab.close' }[key];
+    if (!dialogOpen && modifier && event.shiftKey && !event.altKey && key === 's' && focusedTab()?.type === 'file') command = 'file.save-as';
+    if (!dialogOpen && modifier && !event.shiftKey && !event.altKey && key === 's' && focusedTab()?.type === 'file') command = 'file.save';
+    if (command) { event.preventDefault(); event.stopImmediatePropagation(); runCommand(command); return; }
+    if (!dialogOpen && event.key === 'Escape' && focusMode) { event.preventDefault(); restoreFocus(); }
+  }, { capture: true });
+  fileExplorerEl.addEventListener('keydown', event => {
+    if (event.target.matches('textarea, select, input:not([type="checkbox"])') || event.isComposing || document.querySelector('dialog[open]')) return;
+    const key = event.key.toLowerCase(); const modifier = event.ctrlKey || event.metaKey;
+    let action;
+    if (modifier && !event.altKey && !event.shiftKey) {
+      if (key === 'c') action = () => setFileClipboard('copy');
+      if (key === 'x') action = () => setFileClipboard('move');
+      if (key === 'v' && fileClipboard) action = () => batchFiles(fileClipboard.operation, [...fileClipboard.paths]);
+      if (key === 'a') action = () => { for (const value of visibleEntryPaths()) selectedEntries.add(value); updateSelectionControls(); };
+    }
+    if (!modifier && key === 'delete') action = () => batchFiles('delete');
+    if (action) { event.preventDefault(); event.stopPropagation(); Promise.resolve().then(action).catch(notifyError); }
   });
   entryCancelButton.addEventListener('click', () => {
     entryDialog.close();
@@ -2588,7 +2924,32 @@
   document.getElementById('sessionsButton').addEventListener('click', () => showSessions().catch(notifyError));
   document.getElementById('auditButton').addEventListener('click', () => showAudit().catch(notifyError));
   document.getElementById('draftsButton').addEventListener('click', () => showDrafts().catch(notifyError));
+  document.getElementById('commandButton').addEventListener('click', showCommands);
+  document.getElementById('tabOverviewButton').addEventListener('click', showTabOverview);
+  document.getElementById('saveAllButton').addEventListener('click', () => saveAllFiles().catch(notifyError));
+  document.getElementById('copyEntriesButton').addEventListener('click', () => setFileClipboard('copy'));
+  document.getElementById('cutEntriesButton').addEventListener('click', () => setFileClipboard('move'));
+  document.getElementById('pasteEntriesButton').addEventListener('click', () => { if (fileClipboard) batchFiles(fileClipboard.operation, [...fileClipboard.paths]).catch(notifyError); });
+  document.getElementById('duplicateEntriesButton').addEventListener('click', () => batchFiles('duplicate').catch(notifyError));
+  document.getElementById('deleteEntriesButton').addEventListener('click', () => batchFiles('delete').catch(notifyError));
+  document.getElementById('selectAllEntries').addEventListener('change', event => {
+    for (const value of visibleEntryPaths()) { if (event.target.checked) selectedEntries.add(value); else selectedEntries.delete(value); }
+    updateSelectionControls();
+  });
+  pathInput.addEventListener('input', () => { completionRequest++; clearTimeout(completionTimer); completionTimer = setTimeout(completePath, 180); });
+  pathInput.addEventListener('keydown', event => {
+    if (event.key === 'Tab' && !event.shiftKey) {
+      const options = [...document.getElementById('pathSuggestions').options];
+      if (options.length === 1 && options[0].value.startsWith(pathInput.value)) { event.preventDefault(); pathInput.value = options[0].value; completePath(); }
+    }
+  });
+  new ResizeObserver(positionFocusedGroup).observe(layoutRoot);
   document.querySelectorAll('[data-icon]').forEach(button => button.append(window.WorkbenchIcons(button.dataset.icon)));
+  for (const button of treeContextMenu.querySelectorAll('button')) {
+    const action = button.dataset.action;
+    const name = { 'create-file': 'file-add', 'create-directory': 'folder-add', 'copy-path': 'copy', bookmark: 'star', properties: 'info', size: 'info' }[action] || action;
+    button.prepend(window.WorkbenchIcons(name));
+  }
   sidebarToggleButton.replaceChildren(window.WorkbenchIcons('panel'));
   createFileButton.replaceChildren(window.WorkbenchIcons('file-add'));
   createDirectoryButton.replaceChildren(window.WorkbenchIcons('folder-add'));

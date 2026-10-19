@@ -51,4 +51,8 @@ if [[ "$CURRENT_LIBC" == "glibc" ]]; then
 fi
 
 node -e "require('node-pty')"
+if [[ ! -x /usr/bin/mv ]] || ! /usr/bin/mv --version | head -n 1 | grep -q 'GNU coreutils'; then
+  echo 'GNU /usr/bin/mv is required for exclusive copy and move operations.' >&2
+  exit 1
+fi
 echo "Offline runtime is compatible."

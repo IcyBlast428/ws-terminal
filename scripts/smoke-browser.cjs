@@ -36,7 +36,7 @@ async function run() {
     const original = '\uFEFFalpha=1\r\n\r\n';
     const upload = await context.request.post(`${baseURL}/api/filesystem/upload?path=${encodeURIComponent(file)}`, { data: Buffer.from(original), headers: { 'Content-Type': 'application/octet-stream' } });
     assert.equal(upload.status(), 200);
-    await page.getByRole('textbox', { name: '目录路径', exact: true }).fill(fixture);
+    await page.getByLabel('目录路径', { exact: true }).fill(fixture);
     await page.getByRole('button', { name: '跳转目录', exact: true }).click();
     await page.getByRole('treeitem', { name: 'note.conf', exact: true }).click();
     const explorerBounds = await page.locator('#fileExplorer').boundingBox();

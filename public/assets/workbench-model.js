@@ -11,7 +11,15 @@
   }
   function needsPasteApproval(text) { return /[\r\n\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text); }
   function pastePreview(text) { return text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, value => '\\x' + value.charCodeAt(0).toString(16).padStart(2, '0')); }
-  const model = { errorText, needsPasteApproval, pastePreview };
+  function topLevelPaths(paths) {
+    const unique = [...new Set(paths)];
+    return unique.filter(value => !unique.some(parent => parent !== value && value.startsWith(`${parent}/`)));
+  }
+  function breadcrumbs(value) {
+    let current = '';
+    return [{ name: '/', path: '/' }, ...value.split('/').filter(Boolean).map(name => ({ name, path: current += '/' + name }))];
+  }
+  const model = { errorText, needsPasteApproval, pastePreview, topLevelPaths, breadcrumbs };
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   else root.WorkbenchModel = model;
 }(typeof window === 'undefined' ? globalThis : window));

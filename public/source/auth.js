@@ -1,10 +1,10 @@
 import { createElement, Eye, EyeOff, Terminal, ArrowRight } from 'lucide';
+import { startLoginRain } from './login-rain.js';
 
 function mount(container, onAuthenticated) {
   const form = document.createElement('form'); form.className = 'auth-form'; form.autocomplete = 'off';
   const mark = document.createElement('div'); mark.className = 'auth-mark'; mark.append(createElement(Terminal, { width: 28, height: 28, 'aria-hidden': 'true' }));
-  const heading = document.createElement('h1'); heading.textContent = 'WS Terminal';
-  const host = document.createElement('p'); host.className = 'auth-host'; host.textContent = location.host;
+  const heading = document.createElement('h1'); heading.textContent = 'WSTerm';
   const label = document.createElement('label'); label.htmlFor = 'tokenInput'; label.textContent = '访问令牌';
   const field = document.createElement('div'); field.className = 'auth-token-field';
   const input = document.createElement('input'); input.id = 'tokenInput'; input.type = 'password'; input.name = 'token'; input.autocomplete = 'off'; input.required = true; input.spellcheck = false; input.setAttribute('aria-label', '访问令牌');
@@ -14,7 +14,7 @@ function mount(container, onAuthenticated) {
   field.append(input, reveal);
   const error = document.createElement('p'); error.className = 'auth-error'; error.setAttribute('role', 'alert');
   const submit = document.createElement('button'); submit.type = 'submit'; submit.className = 'auth-submit'; const caption = document.createElement('span'); caption.textContent = '登录'; submit.append(caption, createElement(ArrowRight, { width: 18, height: 18, 'aria-hidden': 'true' }));
-  form.append(mark, heading, host, label, field, error, submit); container.replaceChildren(form);
+  form.append(mark, heading, label, field, error, submit); container.replaceChildren(form);
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (submit.disabled || !input.value.trim()) return;
     submit.disabled = true; input.disabled = true; reveal.disabled = true; caption.textContent = '登录中'; error.textContent = '';
@@ -36,4 +36,5 @@ if (page) {
   const preferences = window.WorkbenchPreferences?.load();
   document.documentElement.dataset.theme = preferences?.theme === 'light' || (preferences?.theme === 'system' && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
   mount(page, () => location.replace('/'));
+  startLoginRain(document.getElementById('loginRain'), page);
 }

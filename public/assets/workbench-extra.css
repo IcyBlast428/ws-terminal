@@ -30,12 +30,14 @@ html[data-theme="light"] :is(.paste-preview, .diff-output, .merge-workspace sect
 html[data-theme="light"] .diff-added { background: #d9f0df; color: #286444; }
 html[data-theme="light"] .diff-removed { background: #fae0e4; color: #933246; }
 html[data-theme="light"] .diff-same { color: #525f66; }
-.login-page { display: grid; place-items: center; min-width: 280px; min-height: 100%; overflow: auto; padding: 32px 24px; }
-.login-page > main { width: min(360px, 100%); }
+.login-page { display: grid; place-items: center; min-width: 280px; min-height: 100%; overflow: auto; padding: 32px 24px; isolation: isolate; background: #101416; }
+.login-page > main { width: min(360px, 100%); position: relative; z-index: 1; }
+.login-rain { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; filter: blur(0.7px); opacity: 0.85; z-index: 0; }
+html[data-theme="light"] .login-page { background: #f4f6f6; }
+html[data-theme="light"] .login-rain { opacity: 0.42; }
 .auth-form { width: 100%; display: flex; flex-direction: column; }
 .auth-mark { width: 50px; height: 50px; display: grid; place-items: center; color: var(--accent); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 20px; }
-.auth-form h1 { margin: 0; color: var(--text); font-size: 28px; font-weight: 600; letter-spacing: 0; }
-.auth-host { margin: 8px 0 34px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.auth-form h1 { margin: 0 0 34px; color: var(--text); font-size: 28px; font-weight: 600; letter-spacing: 0; }
 .auth-form > label { font-size: 13px; margin-bottom: 9px; }
 .auth-token-field { display: flex; align-items: center; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; overflow: hidden; }
 .auth-token-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

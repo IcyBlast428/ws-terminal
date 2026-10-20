@@ -4,6 +4,12 @@
 
 运行时不访问 CDN 或互联网。前端使用项目内的 `xterm.js`、CodeMirror 和 Lucide 图标，后端使用 Node.js、`ws` 和 `node-pty`。
 
+## 1.3.1 登录页外观
+
+- 登录页标题改为 `WSTerm`，不显示访问地址；背景使用本地 Canvas 数字雨，轻微模糊，登录区域自动淡出，表单文字和输入框不模糊。
+- 动画最多约 24 帧/秒，限制画布像素密度和数字列数，页面隐藏时暂停。遵循系统“减少动态效果”偏好，改为静态背景；深色和浅色主题均可用，不新增网络请求或运行依赖。
+- 可运行 `npm run smoke:login` 检查标题、数字雨实际像素与动态、桌面/手机布局、减少动态效果和真实登录退出。浏览器测试沿用下方测试环境配置。
+
 ## 1.3 登录、设置与文件预览
 
 - 未登录访问 `/` 会跳转到独立的 `/login` 页面，访问令牌不再出现在工作区工具栏。令牌不放入 URL、不写入浏览器存储，登录后清空输入。退出登录返回登录页；退出请求失败时保留当前内容并允许重试。
@@ -72,7 +78,7 @@
 已提供多阶段 `Dockerfile` 和 [DaemonSet 部署说明](deploy/kubernetes/README.md)。镜像内含 Node.js 和 Linux PTY 模块，不要求目标节点安装 Node.js 或 npm。
 
 ```bash
-docker build -t ws-terminal:1.3.0 .
+docker build -t ws-terminal:1.3.1 .
 ```
 
 宿主机模式需要特权容器和宿主机 PID/网络命名空间：Terminal 进入宿主机环境，文件树访问同一宿主机文件系统。普通容器模式只操作容器自身，不能将容器内的 root 误认为宿主机 root。节点端口 8002 必须空闲，镜像 CPU 架构必须匹配；请按部署说明替换镜像地址、配置 Secret，并在目标集群验收。
@@ -134,15 +140,15 @@ bash scripts/prepare-offline-bundle.sh
 包名包含 CPU 架构、libc 和 Node ABI，例如：
 
 ```text
-ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz
+ws-terminal-1.3.1-linux-x86_64-glibc-nodeabi137-offline.tgz
 ```
 
 同时会生成 SHA-256 文件。把两个文件传入内网服务器后执行：
 
 ```bash
-sha256sum -c ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
+sha256sum -c ws-terminal-1.3.1-linux-x86_64-glibc-nodeabi137-offline.tgz.sha256
 sudo mkdir -p /opt/ws-terminal
-sudo tar -xzf ws-terminal-1.3.0-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
+sudo tar -xzf ws-terminal-1.3.1-linux-x86_64-glibc-nodeabi137-offline.tgz -C /opt/ws-terminal
 cd /opt/ws-terminal
 bash scripts/check-offline-runtime.sh
 ```
@@ -311,7 +317,7 @@ curl http://服务器IP:8002/api/health
 预期结果：
 
 ```json
-{"ok":true,"name":"ws-terminal","version":"1.3.0"}
+{"ok":true,"name":"ws-terminal","version":"1.3.1"}
 ```
 
 验证登录、WebSocket 和 PTY 命令链路：
